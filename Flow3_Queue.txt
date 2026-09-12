@@ -1,0 +1,267 @@
+# ============================================================
+# Flow3_Queue  -  ตัวจัดคิวงานให้ Flow3 (Mian)
+# วนหยิบงานจาก Queue\ ทีละชุด -> จัดวางไฟล์ -> เรียก Flow3 -> เก็บเข้า Archive
+# Mian.txt ไม่ต้องแก้อะไรเลย
+# ------------------------------------------------------------
+# สั่งหยุดคิว: สร้างไฟล์ State\QUEUE_STOP.txt
+#   (ห้ามใช้ STOP.txt เพราะ Flow3 ลบทิ้งทุกครั้งที่เริ่มทำงาน - Mian.txt บรรทัด 13)
+# ============================================================
+
+SET FolderRoot TO $'''D:\\SPU_JOB\\RPA\\Flow3\\'''
+SET FolderQueue TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Queue\\'''
+SET FolderQueueArchive TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Queue\\Archive\\'''
+SET FolderQueueWorking TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Queue\\_Working\\'''
+SET FolderPathInput TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Input\\'''
+SET FolderPathProcessing TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Processing\\'''
+SET FolderPathProcDocs TO $'''D:\\SPU_JOB\\RPA\\Flow3\\ProcDocs\\'''
+SET FolderPathLog TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
+SET QueueStopFlagPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\QUEUE_STOP.txt'''
+SET QueueLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log_Queue\\queue.log'''
+
+SET QueueRunning TO True
+SET QueueHaltReason TO $'''-'''
+SET QueueHaltItem TO $'''-'''
+SET ProcessedCount TO 0
+
+# ------------------------------------------------------------
+# เตรียมโฟลเดอร์ (ถ้ามีอยู่แล้ว Folder.Create จะ error -> กลืนทิ้ง)
+# ------------------------------------------------------------
+Folder.Create FolderPath: FolderQueue FolderName: $'''Archive''' Folder=> CreatedFolder
+ON ERROR
+
+END
+Folder.Create FolderPath: FolderQueue FolderName: $'''_Working''' Folder=> CreatedFolder
+ON ERROR
+
+END
+Folder.Create FolderPath: FolderRoot FolderName: $'''Log_Queue''' Folder=> CreatedFolder
+ON ERROR
+
+END
+
+# เคลียร์ธงหยุดที่ค้างจากรอบก่อน
+File.Delete Files: QueueStopFlagPath
+ON ERROR
+
+END
+
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [QUEUE_START] เริ่มตัวจัดคิว''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+
+# ------------------------------------------------------------
+# กู้สภาพ: _Working ต้องว่างเปล่า ถ้ามีของค้าง = รอบก่อนหยุดกลางทาง
+# เช็คทั้งไฟล์และโฟลเดอร์
+# ------------------------------------------------------------
+Folder.GetFiles Folder: FolderQueueWorking FileFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> LeftoverFiles
+Folder.GetSubfolders Folder: FolderQueueWorking FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> LeftoverFolders
+IF LeftoverFiles.Count > 0 THEN
+    SET QueueHaltReason TO $'''พบไฟล์ค้างใน Queue\\_Working\\ %LeftoverFiles.Count% ไฟล์ แปลว่ารอบก่อนหน้าหยุดกลางทาง กรุณาตรวจสอบและเคลียร์ด้วยมือก่อนรันใหม่'''
+    SET QueueRunning TO False
+END
+IF LeftoverFolders.Count > 0 THEN
+    SET QueueHaltReason TO $'''พบโฟลเดอร์ค้างใน Queue\\_Working\\ %LeftoverFolders.Count% โฟลเดอร์ แปลว่ารอบก่อนหน้าหยุดกลางทาง กรุณาตรวจสอบและเคลียร์ด้วยมือก่อนรันใหม่'''
+    SET QueueRunning TO False
+END
+
+# ============================================================
+# ลูปหลัก - ทำงานทีละชุดจนคิวหมด
+# ============================================================
+LOOP WHILE (QueueRunning) = (True)
+
+    # --- 1) เช็คคำสั่งหยุดคิว ---
+    IF (File.IfFile.Exists File: QueueStopFlagPath) THEN
+        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+        File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [STOP] พบ QUEUE_STOP.txt หยุดลูปตามคำสั่ง (ทำไปแล้ว %ProcessedCount% ชุด)''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+        File.Delete Files: QueueStopFlagPath
+        ON ERROR
+
+        END
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    # --- 2) หยิบงานถัดไป (เฉพาะไฟล์ชั้นบนสุด Archive/_Working ไม่ถูกนับ) ---
+    Folder.GetFiles Folder: FolderQueue FileFilter: $'''*.xlsx''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> QueueExcels
+    IF QueueExcels.Count = 0 THEN
+        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+        File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [QUEUE_EMPTY] คิวหมด ทำสำเร็จทั้งหมด %ProcessedCount% ชุด''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    SET QueueName TO QueueExcels[0].NameWithoutExtension
+    SET QueueExcelPath TO QueueExcels[0].FullName
+    SET QueueFolderPath TO $'''%FolderQueue%%QueueName%'''
+    SET WorkingExcelPath TO $'''%FolderQueueWorking%%QueueName%.xlsx'''
+    SET WorkingFolderPath TO $'''%FolderQueueWorking%%QueueName%'''
+    SET QueueHaltItem TO QueueName
+
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [ITEM_BEGIN] ชุด: %QueueName%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+
+    # --- 3) ตรวจว่ามีโฟลเดอร์ PDF ชื่อเดียวกันคู่กันจริง + มี PDF ---
+    Folder.GetFiles Folder: QueueFolderPath FileFilter: $'''*.pdf''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> QueuePdfFiles
+    ON ERROR
+        SET QueueHaltReason TO $'''ชุด %QueueName% มีแต่ไฟล์ Excel ไม่พบโฟลเดอร์ PDF ชื่อ %QueueName% คู่กันใน Queue'''
+    END
+    IF QueueHaltReason <> $'''-''' THEN
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+    IF QueuePdfFiles.Count = 0 THEN
+        SET QueueHaltReason TO $'''ชุด %QueueName% ไม่มีไฟล์ PDF อยู่เลย'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+    IF QueuePdfFiles.Count > 50 THEN
+        SET QueueHaltReason TO $'''ชุด %QueueName% มี %QueuePdfFiles.Count% ไฟล์ PDF เกินขีดจำกัด 50 ไฟล์ กรุณาแยกเป็นชุด (2) (3) ก่อน'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    # --- 4) Input ต้องว่าง (ไม่ว่าง = รอบก่อนมีงานค้าง/ล้มเหลว หรือมีไฟล์ ~$ ค้าง) ---
+    Folder.GetFiles Folder: FolderPathInput FileFilter: $'''*.xlsx''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> InputLeftover
+    IF InputLeftover.Count > 0 THEN
+        SET QueueHaltReason TO $'''โฟลเดอร์ Input ยังมีไฟล์ Excel ค้างอยู่ %InputLeftover.Count% ไฟล์ (อาจเป็นงานที่ยังไม่สมบูรณ์ หรือไฟล์ล็อก ~$ จาก Excel ที่ยังเปิดค้าง) กรุณาตรวจสอบก่อนทำชุด %QueueName%'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    # --- 5) หาปี / เทอม ปลายทาง (ต้องมีอย่างละ 1 เท่านั้น) ---
+    Folder.GetSubfolders Folder: FolderPathProcDocs FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> YearFolders
+    IF YearFolders.Count <> 1 THEN
+        SET QueueHaltReason TO $'''ภายใน ProcDocs ต้องมีโฟลเดอร์ปีเพียง 1 โฟลเดอร์ พบ %YearFolders.Count% โฟลเดอร์'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+    SET YearFolderPath TO YearFolders[0].FullName
+    Folder.GetSubfolders Folder: YearFolderPath FolderFilter: $'''Term_*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> TermFolders
+    IF TermFolders.Count <> 1 THEN
+        SET QueueHaltReason TO $'''ภายใน %YearFolderPath% ต้องมีโฟลเดอร์ Term_* เพียง 1 โฟลเดอร์ พบ %TermFolders.Count% โฟลเดอร์'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+    SET TermFolderPath TO TermFolders[0].FullName
+
+    # --- 6) ย้ายงานเข้า _Working ก่อน (กันวนทำซ้ำถ้าแครช) ---
+    File.Move Files: QueueExcelPath Destination: FolderQueueWorking IfFileExists: File.IfExists.Overwrite MovedFiles=> MovedWorkingExcel
+    Folder.Move Folder: QueueFolderPath Destination: FolderQueueWorking MovedFolder=> MovedWorkingFolder
+
+    # --- 7) ล้างของเก่าทั้งหมด ---
+    Folder.Empty Folder: FolderPathProcessing
+    ON ERROR
+
+    END
+    Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> OldLogFiles
+    IF OldLogFiles.Count > 0 THEN
+        File.Delete Files: OldLogFiles
+        ON ERROR
+
+        END
+    END
+    # ลบ "ทุกชุด" ที่ค้างอยู่ในเทอม ไม่ใช่เฉพาะชื่อเดียวกัน
+    Folder.GetSubfolders Folder: TermFolderPath FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> OldBatchFolders
+    LOOP FOREACH CurrentOldBatch IN OldBatchFolders
+        Folder.Delete Folder: CurrentOldBatch
+    END
+
+    # หมายเหตุ: ห้ามลบ/ห้ามหมุน State\resume_success.txt กับ print_success.txt
+    # คีย์คือ ปี|เทอม|ชุด|เลขบัตร|ชื่อไฟล์ PDF (Mian.txt บรรทัด 586)
+    # ถ้าล้างทิ้ง จะเสียระบบกันแนบซ้ำเมื่อต้องรันชุดเดิมซ้ำหลังแก้ปัญหา
+
+    # --- 8) วางไฟล์งานชุดใหม่ ---
+    File.Copy Files: WorkingExcelPath Destination: FolderPathInput IfFileExists: File.IfExists.Overwrite CopiedFiles=> StagedExcel
+    Folder.Copy Folder: WorkingFolderPath Destination: TermFolderPath CopiedFolder=> StagedFolder
+
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [STAGED] %QueueName% (%QueuePdfFiles.Count% PDF) -> Input + %TermFolderPath%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+
+    # --- 9) เรียกตัวทำงาน 1 รอบ แล้วรอจนจบ ---
+    # RunOneRound = เนื้อหาเดิมของ subflow Main (ดูขั้นตอนแปลงใน SETUP.md)
+    BLOCK CallRunOneRound
+    ON BLOCK ERROR
+        SET QueueHaltReason TO $'''RunOneRound ทำงานผิดพลาด ขณะทำชุด %QueueName%'''
+    END
+        CALL RunOneRound
+    END
+    IF QueueHaltReason <> $'''-''' THEN
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    # --- 10) ตรวจผล: Flow3 ย้าย Excel ออกจาก Input ก็ต่อเมื่อ PendingWork = False ---
+    Folder.GetFiles Folder: FolderPathInput FileFilter: $'''*.xlsx''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> InputAfterRun
+    IF InputAfterRun.Count > 0 THEN
+        SET QueueHaltReason TO $'''ชุด %QueueName% ทำงานไม่สมบูรณ์ (มีรายการล้มเหลว / ชุดว่าง / PDF เกิน 50 / Flow3 หยุดกลางทาง) ไฟล์ Excel ยังค้างใน Input กรุณาดู Log_Output แล้วแก้ไขก่อนรันคิวต่อ | ไฟล์งานอยู่ที่ Queue\\_Working\\'''
+        SET QueueRunning TO False
+        EXIT LOOP
+    END
+
+    # --- 11) เก็บงานที่เสร็จแล้วเข้า Queue\Archive\<timestamp>_<ชื่อชุด>\ ---
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
+    Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTime CustomFormat: $'''yyyyMMdd_HHmmss''' Result=> DoneStamp
+    SET ArchiveItemName TO $'''%DoneStamp%_%QueueName%'''
+    SET ArchiveItemPath TO $'''%FolderQueueArchive%%ArchiveItemName%'''
+    Folder.Create FolderPath: FolderQueueArchive FolderName: ArchiveItemName Folder=> ArchiveItemFolder
+    File.Move Files: WorkingExcelPath Destination: ArchiveItemPath IfFileExists: File.IfExists.Overwrite MovedFiles=> ArchivedExcel
+    Folder.Move Folder: WorkingFolderPath Destination: ArchiveItemPath MovedFolder=> ArchivedFolder
+
+    Variables.IncreaseVariable Value: ProcessedCount IncrementValue: 1
+    SET QueueHaltItem TO $'''-'''
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [ITEM_DONE] %QueueName% -> Archive\\%ArchiveItemName% (สะสม %ProcessedCount% ชุด)''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+END
+
+# ============================================================
+# จบลูป - ถ้ามีเหตุให้หยุด: แจ้งเตือน + ส่งเมล + เล่นเสียงวนจนกว่าจะสั่ง QUEUE_STOP
+# ============================================================
+IF QueueHaltReason <> $'''-''' THEN
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> HaltTime
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%HaltTime%] [QUEUE_HALT] ชุด: %QueueHaltItem% | สาเหตุ: %QueueHaltReason%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow3 Queue หยุดทำงาน - %QueueHaltItem%''' Body: $'''ตัวจัดคิว Flow3 หยุดทำงาน
+
+เวลา: %HaltTime%
+ชุดที่มีปัญหา: %QueueHaltItem%
+สาเหตุ: %QueueHaltReason%
+
+ทำสำเร็จไปแล้วก่อนหน้านี้: %ProcessedCount% ชุด
+
+ระบบหยุดรอการตรวจสอบจากเจ้าหน้าที่
+เสียงเตือนจะดังทุก 20 วินาที จนกว่าจะสร้างไฟล์:
+%QueueStopFlagPath%''' IsBodyHtml: False
+    ON ERROR
+
+    END
+    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 Flow3 Queue หยุดทำงาน''' Message: $'''ชุด: %QueueHaltItem%
+
+%QueueHaltReason%
+
+สร้างไฟล์ QUEUE_STOP.txt ใน State เพื่อหยุดเสียงเตือน''' Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
+    ON ERROR
+
+    END
+    SET AlarmRunning TO True
+    LOOP WHILE (AlarmRunning) = (True)
+        IF (File.IfFile.Exists File: QueueStopFlagPath) THEN
+            SET AlarmRunning TO False
+            EXIT LOOP
+        END
+        CALL PlayErrorAlarm
+        WAIT 20
+    END
+    File.Delete Files: QueueStopFlagPath
+    ON ERROR
+
+    END
+END
+
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [QUEUE_END] จบตัวจัดคิว ทำสำเร็จ %ProcessedCount% ชุด''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+
+
+SUBFLOW PlayErrorAlarm
+
+Workstation.PlaySound.PlaySound WavFile: $'''D:\\SPU_JOB\\RPA\\Flow3\\Sound\\error_alarm.wav'''
+    ON ERROR
+
+    END

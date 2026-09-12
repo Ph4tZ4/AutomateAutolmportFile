@@ -1,0 +1,27 @@
+Workstation.PlaySound.PlaySound WavFile: $'''D:\\SPU_JOB\\RPA\\Flow3\\Sound\\error_alarm.wav'''
+    ON ERROR
+
+    END
+Scripting.RunPowershellScript.RunScript Script: $'''$audioPath = \'D:\\SPU_JOB\\RPA\\Flow3\\Sound\\Sounderror_alarm.wav\'
+
+if (-not (Test-Path -LiteralPath $audioPath)) {
+    throw \"ไม่พบไฟล์เสียง: $audioPath\"
+}
+
+$childScript = @\"
+`$player = New-Object System.Media.SoundPlayer \'$audioPath\'
+`$player.Load()
+`$player.Play()
+Start-Sleep -Seconds 15
+`$player.Stop()
+`$player.Dispose()
+\"@
+
+$encodedCommand = [Convert]::ToBase64String(
+    [Text.Encoding]::Unicode.GetBytes($childScript)
+)
+
+Start-Process `
+    -FilePath \"$env:WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" `
+    -ArgumentList \"-NoProfile -NonInteractive -EncodedCommand $encodedCommand\" `
+    -WindowStyle Hidden''' ScriptOutput=> PowershellOutput
