@@ -65,6 +65,13 @@ IF LeftoverFiles.Count > 0 THEN
         SET QueueHaltReason TO $'''กู้ไฟล์จาก Queue\\_Working\\ กลับไป Queue\\ ไม่สำเร็จ กรุณาย้ายด้วยมือ'''
         SET QueueRunning TO False
     END
+    # ลบ Excel สำเนาที่ค้างใน Input (ต้นฉบับกลับเข้า Queue แล้ว) กันด่าน "Input ต้องว่าง" หยุดคิว
+    LOOP FOREACH CurrentLeftoverFile IN LeftoverFiles
+        File.Delete Files: $'''%FolderPathInput%%CurrentLeftoverFile.Name%'''
+        ON ERROR
+
+        END
+    END
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
     File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [RECOVERED] กู้ไฟล์ค้าง %LeftoverFiles.Count% ไฟล์ จาก _Working กลับเข้าคิว''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
 END
