@@ -4,9 +4,9 @@
 
 | ไฟล์ | คืออะไร |
 |---|---|
-| `Mian.txt` | Flow หลัก ทำงาน 1 ชุดต่อ 1 รอบ (ชื่อใน PAD ต้องเป็น `Flow3`) |
-| `Flow3_Queue.txt` | ตัวจัดคิว วนเรียก `Flow3` ซ้ำ ๆ — **ตัวนี้คือตัวที่สั่งรัน** |
-| `PlayErrorAlarm.txt` | Subflow เสียงเตือน (อยู่ใน `Flow3`) |
+| `RunOneRound.txt` | ตัวทำงาน 1 ชุดต่อ 1 รอบ (แก้ไข/แพตช์ครบแล้ว พร้อม paste) |
+| `Flow3_Queue.txt` | ตัวจัดคิว วนเรียก `RunOneRound` ซ้ำ ๆ |
+| `PlayErrorAlarm.txt` | Subflow เสียงเตือน |
 
 ---
 
@@ -82,38 +82,26 @@ Write-Host "สร้างโฟลเดอร์เรียบร้อย"
 |---|---|---|
 | `Main` | `CALL Flow3_Queue` บรรทัดเดียว | จุดเริ่ม |
 | `Flow3_Queue` | `Flow3_Queue.txt` | ตัวจัดคิว วนลูป |
-| `RunOneRound` | `Mian.txt` (เนื้อหาเดิมของ Main) | ตัวทำงาน 1 ชุด |
+| `RunOneRound` | `RunOneRound.txt` | ตัวทำงาน 1 ชุด |
 | `PlayErrorAlarm` | `PlayErrorAlarm.txt` | เสียงเตือน |
+
+`RunOneRound.txt` แก้ไข/แพตช์ครบแล้ว (อ่านเลข KTB, วนรอแท็บ PDF, `EXIT`→`GOTO` ทั้ง 11 จุด) — paste ตรงได้เลย ไม่ต้องแก้อะไรเพิ่ม
 
 ### ขั้นตอน
 
-1. เปิด Flow `Flow3` → กด `+ New` สร้าง subflow ชื่อ **`RunOneRound`**
-2. ไปแท็บ `Main` → `Ctrl+A` → `Ctrl+X` (ตัดออกทั้งหมด)
-3. ไปแท็บ `RunOneRound` → `Ctrl+V`
-4. กลับไปแท็บ `Main` → ลาก action **Run subflow** ลงมา → เลือก `Flow3_Queue`
+1. เปิด Flow `Flow3` → กด `+ New` สร้าง subflow ชื่อ **`RunOneRound`** → paste จาก `RunOneRound.txt`
+2. ไปแท็บ `Main` → `Ctrl+A` → `Delete` → ลาก action **Run subflow** ลงมา → เลือก `Flow3_Queue`
    (เหลือบรรทัดเดียวเท่านั้น)
-5. สร้าง subflow **`Flow3_Queue`** → paste จาก `Flow3_Queue.txt`
-6. สร้าง subflow **`PlayErrorAlarm`** → paste จาก `PlayErrorAlarm.txt`
+3. สร้าง subflow **`Flow3_Queue`** → paste จาก `Flow3_Queue.txt`
+4. สร้าง subflow **`PlayErrorAlarm`** → paste จาก `PlayErrorAlarm.txt`
 
 ---
 
-## 3. แปลง `EXIT` เป็น `GOTO` ใน `RunOneRound` (สำคัญที่สุด)
+## 3. ตรวจ `GOTO` / `Label` ใน `RunOneRound`
 
-`EXIT` ของ PAD = **จบทั้ง Flow** ไม่ใช่จบแค่ subflow
+`RunOneRound.txt` แปลง `EXIT` (จบทั้ง Flow) เป็น `GOTO EndOfRound` ไว้ครบ 11 จุดแล้ว เพราะ `EXIT` ใน PAD จบทั้ง Flow ไม่ใช่แค่ subflow — ถ้าไม่แปลง ทำชุดแรกเสร็จแล้วลูปคิวจะตายทันที
 
-ถ้าไม่แก้ พอทำชุดแรกเสร็จแล้วเจอ `EXIT` ลูปคิวจะตายทันที ไม่วนต่อ
-
-### วิธีแก้
-
-1. เลื่อนไปท้ายสุดของ subflow `RunOneRound`
-2. ลาก action **Flow control → Label** ลงมา ตั้งชื่อ `EndOfRound`
-3. หา action **Exit** ทั้ง **11 จุด** (ใช้ช่อง `Search inside the flow` พิมพ์ `Exit`)
-4. ลบทิ้งทีละอัน แล้วแทนด้วย **Flow control → Go to** → เลือก label `EndOfRound`
-
-> **ทำน้อยสุดได้ 2 จุด** — ถ้าไม่อยากแก้ครบ 11 ให้แก้เฉพาะ 2 จุดนี้ก่อน
-> (`Mian.txt` บรรทัด 70 กับ 218 — กรณี Excel ไม่มีแถวข้อมูล)
-> ที่เหลือเป็นกรณี critical error ซึ่งตั้งใจให้หยุดทั้งระบบอยู่แล้ว
-> แต่ถ้าแก้ครบ 11 จะได้เสียงเตือนดังวนซ้ำตามที่ออกแบบไว้
+หลัง paste ให้ดู `Errors list`: ถ้า action **Go to** / **Label** ไม่มีในรุ่น PAD ที่ใช้ จะขึ้น error ชี้ตำแหน่งให้ตรง — แก้โดยลาก **Flow control → Go to** / **Flow control → Label** แทนที่บรรทัดนั้น
 
 ---
 

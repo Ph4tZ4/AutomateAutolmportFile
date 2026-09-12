@@ -17,6 +17,8 @@ SET FolderPathProcDocs TO $'''D:\\SPU_JOB\\RPA\\Flow3\\ProcDocs\\'''
 SET FolderPathLog TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
 SET QueueStopFlagPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\QUEUE_STOP.txt'''
 SET QueueLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log_Queue\\queue.log'''
+SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB.log'''
+SET KtbLineNo TO 0
 
 SET QueueRunning TO True
 SET QueueHaltReason TO $'''-'''
@@ -38,6 +40,10 @@ Folder.Create FolderPath: FolderRoot FolderName: $'''Log_Queue''' Folder=> Creat
 ON ERROR
 
 END
+Folder.Create FolderPath: FolderRoot FolderName: $'''KTB''' Folder=> CreatedFolder
+ON ERROR
+
+END
 
 # เคลียร์ธงหยุดที่ค้างจากรอบก่อน
 File.Delete Files: QueueStopFlagPath
@@ -53,14 +59,26 @@ File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [QUEUE_START] �
 # เช็คทั้งไฟล์และโฟลเดอร์
 # ------------------------------------------------------------
 Folder.GetFiles Folder: FolderQueueWorking FileFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> LeftoverFiles
-Folder.GetSubfolders Folder: FolderQueueWorking FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> LeftoverFolders
 IF LeftoverFiles.Count > 0 THEN
-    SET QueueHaltReason TO $'''พบไฟล์ค้างใน Queue\\_Working\\ %LeftoverFiles.Count% ไฟล์ แปลว่ารอบก่อนหน้าหยุดกลางทาง กรุณาตรวจสอบและเคลียร์ด้วยมือก่อนรันใหม่'''
-    SET QueueRunning TO False
+    File.Move Files: LeftoverFiles Destination: FolderQueue IfFileExists: File.IfExists.Overwrite MovedFiles=> RecoveredFiles
+    ON ERROR
+        SET QueueHaltReason TO $'''กู้ไฟล์จาก Queue\\_Working\\ กลับไป Queue\\ ไม่สำเร็จ กรุณาย้ายด้วยมือ'''
+        SET QueueRunning TO False
+    END
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [RECOVERED] กู้ไฟล์ค้าง %LeftoverFiles.Count% ไฟล์ จาก _Working กลับเข้าคิว''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+END
+Folder.GetSubfolders Folder: FolderQueueWorking FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> LeftoverFolders
+LOOP FOREACH CurrentLeftoverFolder IN LeftoverFolders
+    Folder.Move Folder: CurrentLeftoverFolder Destination: FolderQueue MovedFolder=> RecoveredFolder
+    ON ERROR
+        SET QueueHaltReason TO $'''กู้โฟลเดอร์ %CurrentLeftoverFolder.Name% จาก _Working กลับไป Queue ไม่สำเร็จ (อาจมีชื่อซ้ำอยู่แล้ว) กรุณาย้ายด้วยมือ'''
+        SET QueueRunning TO False
+    END
 END
 IF LeftoverFolders.Count > 0 THEN
-    SET QueueHaltReason TO $'''พบโฟลเดอร์ค้างใน Queue\\_Working\\ %LeftoverFolders.Count% โฟลเดอร์ แปลว่ารอบก่อนหน้าหยุดกลางทาง กรุณาตรวจสอบและเคลียร์ด้วยมือก่อนรันใหม่'''
-    SET QueueRunning TO False
+    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
+    File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [RECOVERED] กู้โฟลเดอร์ค้าง %LeftoverFolders.Count% โฟลเดอร์ จาก _Working กลับเข้าคิว''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
 END
 
 # ============================================================
