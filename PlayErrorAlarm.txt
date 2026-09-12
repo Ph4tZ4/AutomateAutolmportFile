@@ -2,7 +2,7 @@ Workstation.PlaySound.PlaySound WavFile: $'''D:\\SPU_JOB\\RPA\\Flow3\\Sound\\err
     ON ERROR
 
     END
-Scripting.RunPowershellScript.RunScript Script: $'''$audioPath = \'D:\\SPU_JOB\\RPA\\Flow3\\Sound\\Sounderror_alarm.wav\'
+Scripting.RunPowershellScript.RunScript Script: $'''$audioPath = \'D:\\SPU_JOB\\RPA\\Flow3\\Sound\\error_alarm.wav\'
 
 if (-not (Test-Path -LiteralPath $audioPath)) {
     throw \"ไม่พบไฟล์เสียง: $audioPath\"

@@ -275,11 +275,3 @@ END
 
 DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> QueueNow
 File.WriteText File: QueueLogPath TextToWrite: $'''[%QueueNow%] [QUEUE_END] จบตัวจัดคิว ทำสำเร็จ %ProcessedCount% ชุด''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-
-
-SUBFLOW PlayErrorAlarm
-
-Workstation.PlaySound.PlaySound WavFile: $'''D:\\SPU_JOB\\RPA\\Flow3\\Sound\\error_alarm.wav'''
-    ON ERROR
-
-    END
