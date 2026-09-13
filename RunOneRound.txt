@@ -1162,8 +1162,12 @@ END
                         END
                         SET KtbLineNo TO KtbLines.Count + 1
                     END
+                    SET KtbWriteFailed TO False
                     File.WriteText File: KtbLogPath TextToWrite: $'''%KtbLineNo%. %KtbDocNo% ชุดที่ %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     ON ERROR
+                        SET KtbWriteFailed TO True
+                    END
+                    IF KtbWriteFailed = True THEN
                         File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''บันทึก KTB.log ไม่สำเร็จ | %KtbDocNo% | %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     END
                 ELSE
