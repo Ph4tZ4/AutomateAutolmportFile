@@ -17,8 +17,6 @@ SET FolderPathProcDocs TO $'''D:\\SPU_JOB\\RPA\\Flow3\\ProcDocs\\'''
 SET FolderPathLog TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
 SET QueueStopFlagPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\QUEUE_STOP.txt'''
 SET QueueLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log_Queue\\queue.log'''
-SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB.log'''
-SET KtbLineNo TO 0
 
 SET QueueRunning TO True
 SET QueueHaltReason TO $'''-'''

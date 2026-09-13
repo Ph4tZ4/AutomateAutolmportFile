@@ -1123,13 +1123,49 @@ END
                     WAIT 3
                 END
                 IF PdfTabFound = True THEN
-                    Variables.IncreaseVariable Value: KtbLineNo IncrementValue: 1
-                    File.WriteText File: KtbLogPath TextToWrite: $'''%KtbLineNo%. %KtbDocNo% ชุดที่ %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Control}({W})''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: False
                     WAIT 2
                     SET PrintPdfSaved TO True
                     File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''%CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | ปิดแท็บ PDF แล้ว (รอบ %PdfTabTry%) | %KtbDocNo% | %PdfTabUrl%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     File.WriteText File: PrintResumeLogPath TextToWrite: PrintResumeKey AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+                    # ---- บันทึกเลข KTB (อ่านหลังพิมพ์ ตัวเลขถูกสร้างแล้ว / พังก็ไม่กระทบงานพิมพ์) ----
+                    SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB.log'''
+                    Folder.Create FolderPath: $'''D:\\SPU_JOB\\RPA\\Flow3''' FolderName: $'''KTB''' Folder=> KtbFolder
+                    ON ERROR
+
+                    END
+                    SET KtbAfterPrint TO $'''NOT_FOUND'''
+                    LOOP KtbTry FROM 1 TO 10 STEP 1
+                        WebAutomation.ExecuteJavascript BrowserInstance: Browser Javascript: $'''function ExecuteScript() {
+    var text = document.body.innerText || \"\";
+    var m = text.match(/KTB-\\d+-\\d+/g);
+    if (!m) return \"NOT_FOUND\";
+    var u = m.filter(function (v, i) { return m.indexOf(v) === i; });
+    return u.join(\" / \");
+}''' Result=> KtbAfterPrint
+                        ON ERROR
+                            SET KtbAfterPrint TO $'''JAVASCRIPT_ERROR'''
+                        END
+                        IF StartsWith(KtbAfterPrint, $'''KTB-''', False) THEN
+                            EXIT LOOP
+                        END
+                        WAIT 1
+                    END
+                    IF StartsWith(KtbAfterPrint, $'''KTB-''', False) THEN
+                        SET KtbDocNo TO KtbAfterPrint
+                    END
+                    SET KtbLineNo TO 1
+                    IF (File.IfFile.Exists File: KtbLogPath) THEN
+                        File.ReadTextFromFile.ReadTextAsList File: KtbLogPath Encoding: File.TextFileEncoding.Unicode Contents=> KtbLines
+                        ON ERROR
+
+                        END
+                        SET KtbLineNo TO KtbLines.Count + 1
+                    END
+                    File.WriteText File: KtbLogPath TextToWrite: $'''%KtbLineNo%. %KtbDocNo% ชุดที่ %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+                    ON ERROR
+                        File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''บันทึก KTB.log ไม่สำเร็จ | %KtbDocNo% | %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+                    END
                 ELSE
                     SET PrintFailed TO True
                     SET PrintFailureReason TO $'''รอแท็บ PDF 20 รอบ (~80 วินาที) แล้วไม่ขึ้น | URL สุดท้าย=%PdfTabUrl% | KTB=%KtbDocNo% | ตรวจ chrome://settings/content/pdfDocuments ต้องเป็น Open PDFs in Chrome และ chrome://settings/content/popups ต้องอนุญาต agent.dsl.studentloan.or.th'''
