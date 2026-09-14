@@ -18,6 +18,15 @@ SET FolderPathLog TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
 SET QueueStopFlagPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\QUEUE_STOP.txt'''
 SET QueueLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log_Queue\\queue.log'''
 
+# แยกไฟล์ KTB.log ต่อการรันแต่ละครั้ง เป็น KTB_yyyyMMdd_HHmmss.log
+Folder.Create FolderPath: FolderRoot FolderName: $'''KTB''' Folder=> CreatedFolder
+ON ERROR
+
+END
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> KtbRunStartTime
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: KtbRunStartTime CustomFormat: $'''yyyyMMdd_HHmmss''' Result=> KtbRunStamp
+SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB_%KtbRunStamp%.log'''
+
 SET QueueRunning TO True
 SET QueueHaltReason TO $'''-'''
 SET QueueHaltItem TO $'''-'''
