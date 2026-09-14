@@ -1,6 +1,8 @@
+# 1. การตั้งค่าระบบ
+# 1.1 กำหนดโฟลเดอร์ Input, Processing, Output, Log และ State
 SET FolderPathInput TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Input\\'''
 SET FolderArchive TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Input\\Archive\\'''
-SET FolderPathLog TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
+SET FolderPathLogRoot TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Log\\'''
 SET FolderPathLogOutput TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Output_Log\\'''
 SET FolderPathOutput TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Output\\'''
 SET FolderPathProcessing TO $'''D:\\SPU_JOB\\RPA\\Flow3\\Processing\\'''
@@ -8,16 +10,62 @@ SET FolderPathProcDocs TO $'''D:\\SPU_JOB\\RPA\\Flow3\\ProcDocs\\'''
 SET ResumeLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\resume_success.txt'''
 SET PrintResumeLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\print_success.txt'''
 SET StopFlagPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\STOP.txt'''
+# 1.2 สร้าง RunID และโฟลเดอร์ Log เฉพาะรอบ
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> RunStartTime
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: RunStartTime CustomFormat: $'''yyyyMMdd_HHmmss''' Result=> RunID
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: RunStartTime CustomFormat: $'''dd/MM''' Result=> RunDisplayDayMonth
+Text.ConvertDateTimeToText.FromCustomDateTime DateTime: RunStartTime CustomFormat: $'''HH:mm:ss''' Result=> RunDisplayClock
+SET RunDisplayYearBE TO RunStartTime.Year + 543
+SET RunDisplayTime TO $'''%RunDisplayDayMonth%/%RunDisplayYearBE% %RunDisplayClock%'''
+Folder.Create FolderPath: FolderPathLogRoot FolderName: RunID Folder=> RunLogFolder
+SET FolderPathLog TO $'''%FolderPathLogRoot%%RunID%\\'''
+SET EmailOutboxRoot TO $'''D:\\SPU_JOB\\RPA\\Flow3\\State\\EmailOutbox\\'''
+Folder.Create FolderPath: $'''D:\\SPU_JOB\\RPA\\Flow3\\State''' FolderName: $'''EmailOutbox''' Folder=> EmailOutboxFolder
+    ON ERROR
+
+    END
+# 1.3 เตรียมตัวแปรกลางสำหรับอีเมลแจ้งข้อผิดพลาด
+SET FailureEmailRequired TO False
+SET FailureSource TO $'''-'''
+SET FailureMessage TO $'''-'''
+SET FailureTerm TO $'''-'''
+SET FailureBatch TO $'''-'''
+SET SendingPendingEmail TO False
+# 2. การส่งอีเมลค้างจากรอบก่อน
+# 2.1 ตรวจ EmailOutbox ก่อนเริ่มงานใหม่
+LABEL CheckPendingEmail
+Folder.GetSubfolders Folder: EmailOutboxRoot FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> PendingEmailFolders
+IF PendingEmailFolders.Count > 0 THEN
+    # 2.2 โหลดข้อความและ Log ของอีเมลค้าง แล้วส่งผ่านตัวส่ง Fail กลาง
+    SET PendingEmailFolder TO PendingEmailFolders[0]
+    SET PendingEmailFolderPath TO PendingEmailFolder.FullName
+    SET PendingEmailInfoPath TO $'''%PendingEmailFolderPath%\\pending_email.log'''
+    SET FailureMessage TO $'''อีเมลค้างจากรอบก่อน'''
+    IF (File.IfFile.Exists File: PendingEmailInfoPath) THEN
+        File.ReadTextFromFile.ReadText File: PendingEmailInfoPath Encoding: File.TextFileEncoding.Unicode Content=> FailureMessage
+    END
+    SET FailureSource TO $'''Pending email retry'''
+    SET FailureTerm TO $'''-'''
+    SET FailureBatch TO $'''-'''
+    Folder.GetFiles Folder: PendingEmailFolderPath FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FailureLogFiles
+    SET SendingPendingEmail TO True
+    GOTO SendFailureEmail
+END
+# 3. การเริ่มรอบใหม่
+# 3.1 ล้างคำสั่ง STOP ที่ค้างและกำหนดสถานะเริ่มต้น
+LABEL BeginRun
 SET StopRequested TO False
 SET PendingWork TO False
 IF (File.IfFile.Exists File: StopFlagPath) THEN
     File.Delete Files: StopFlagPath
-    ON ERROR
+        ON ERROR
 
-    END
+        END
 END
 SET CriticalErrorSource TO $'''เริ่มต้นระบบ'''
 SET CriticalErrorMessage TO $'''-'''
+# 4. การรับไฟล์ Excel
+# 4.1 ตรวจว่า Input มี Excel เพียงหนึ่งไฟล์
 SET CriticalErrorSource TO $'''Input / Excel'''
 SET CriticalErrorMessage TO $'''ไม่สามารถค้นหา คัดลอก เปิด หรืออ่านไฟล์ Excel ได้'''
 SET InputStartupFailed TO False
@@ -28,32 +76,12 @@ END
     Folder.GetFiles Folder: FolderPathInput FileFilter: $'''*.xlsx''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> Files
     IF Files.Count <> 1 THEN
         SET CriticalErrorMessage TO $'''ต้องมีไฟล์ Excel .xlsx ในโฟลเดอร์ Input เพียง 1 ไฟล์เท่านั้น พบทั้งหมด %Files.Count% ไฟล์ กรุณาปิด Excel และตรวจสอบไฟล์ ~$ หรือไฟล์ซ้ำ'''
-        # INLINE_BEGIN 0001 CriticalErrorAlert
-        CALL PlayErrorAlarm
-        Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-        File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-        WebAutomation.CloseWebBrowser BrowserInstance: Browser
-        ON ERROR
-            SET BrowserCloseFailed TO True
-        END
-        Excel.CloseExcel.Close Instance: ExcelInstance
-        ON ERROR
-            SET ExcelCloseFailed TO True
-        END
-        GOTO EndOfRound
-        # INLINE_END 0001 CriticalErrorAlert
+        SET FailureEmailRequired TO True
+        SET FailureSource TO CriticalErrorSource
+        SET FailureMessage TO CriticalErrorMessage
+        GOTO SendFailureEmail
     END
+    # 4.2 คัดลอก Excel ไป Processing และเปิดแบบ Read-only
     File.Copy Files: Files[0] Destination: FolderPathProcessing IfFileExists: File.IfExists.Overwrite CopiedFiles=> CopiedFiles
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> DataStageNow
     File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%DataStageNow%] EXCEL_OPEN_BEGIN''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
@@ -63,17 +91,19 @@ END
     Excel.GetFirstFreeColumnRow Instance: ExcelInstance FirstFreeColumn=> FirstFreeColumn FirstFreeRow=> FirstFreeRow
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> DataStageNow
     File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%DataStageNow%] EXCEL_RANGE_READY row=%FirstFreeRow% column=%FirstFreeColumn%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    # FLOW3_EMPTY_ROWS_GUARD_BEGIN
+    # 4.3 หยุดเมื่อ Excel ไม่มีข้อมูลหลังหัวตาราง
     IF FirstFreeRow <= 2 THEN
         File.WriteText File: $'''%FolderPathLog%excel_rows.log''' TextToWrite: $'''[NO WORK] Excel ไม่มีแถวข้อมูลหลังหัวตาราง จบการทำงานก่อนเปิดเว็บ''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
         Excel.CloseExcel.Close Instance: ExcelInstance
-        GOTO EndOfRound
+        SET FailureSource TO $'''Input / Excel'''
+        SET FailureMessage TO $'''Excel ไม่มีแถวข้อมูลหลังหัวตาราง'''
+        GOTO SendFailureEmail
     END
     SET ExcelReadEndColumn TO 4
-    # FLOW3_EMPTY_ROWS_GUARD_END
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> DataStageNow
     File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%DataStageNow%] EXCEL_READ_BEGIN A:D''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    # FLOW3_BULK_READ_BEGIN
+    # 5. การอ่านข้อมูล Excel
+    # 5.1 อ่าน A:D แบบรวดเร็วผ่าน VBScript
     SET FastExcelReadOK TO False
     SET FastExcelCSV TO $'''EMPTY'''
     SET FastExcelError TO $'''-'''
@@ -164,14 +194,15 @@ End Function
             SET FastExcelReadOK TO True
         END
     END
+    # 5.2 ใช้ตัวอ่าน Excel ของ PAD เมื่อการอ่านแบบเร็วไม่สำเร็จ
     IF FastExcelReadOK = False THEN
         File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[EXCEL_FALLBACK] %FastExcelError%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
         Excel.ReadFromExcel.ReadCells Instance: ExcelInstance StartColumn: $'''A''' StartRow: 2 EndColumn: ExcelReadEndColumn EndRow: FirstFreeRow - 1 GetCellContentsMode: Excel.GetCellContentsMode.PlainText FirstLineIsHeader: False RangeValue=> ExcelData
     END
-    # FLOW3_BULK_READ_END
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> DataStageNow
     File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%DataStageNow%] EXCEL_READ_DONE fast=%FastExcelReadOK% rows=%ExcelData.RowsCount%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    # FLOW3_EMPTY_ROWS_PREPARE_BEGIN
+    # 6. การตรวจสอบข้อมูลนักศึกษา
+    # 6.1 ตัดแถวว่างและตรวจเลขบัตรประชาชน 13 หลัก
     SET RawExcelRowCount TO FirstFreeRow - 2
     IF FastExcelReadOK = False THEN
         Variables.DeleteEmptyRowsFromDataTable DataTable: ExcelData
@@ -193,7 +224,6 @@ End Function
             IF IsEmpty(PrepareStudentID) THEN
                 Variables.IncreaseVariable Value: BlankStudentIDRowCount IncrementValue: 1
             ELSE
-                # FLOW3_EXCEL_ID_INDEX_BEGIN
                 Text.ParseText.RegexParseForFirstOccurrence Text: PrepareStudentID TextToFind: $'''^\\d{13}$''' StartingPosition: 0 IgnoreCase: False OccurrencePosition=> PrepareIDPosition Match=> PrepareIDMatch
                 IF PrepareIDPosition <> (-1) THEN
                     Variables.AddItemToList Item: WorkExcelRowIndex List: WorkExcelRowIndexes
@@ -206,7 +236,6 @@ End Function
                     Variables.IncreaseVariable Value: InvalidExcelIDCount IncrementValue: 1
                     File.WriteText File: $'''%FolderPathLog%invalid_excel_student_id.log''' TextToWrite: $'''[SKIP] เลขบัตรใน Excel ไม่ถูกต้อง | รหัสนักศึกษา: %PrepareStudentCode% | เลขบัตรประชาชน: %PrepareStudentID% | ชื่อ-สกุล: %PrepareStudentName%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                 END
-                # FLOW3_EXCEL_ID_INDEX_END
             END
         END
         Variables.IncreaseVariable Value: WorkExcelRowIndex IncrementValue: 1
@@ -215,131 +244,53 @@ End Function
     IF WorkExcelRowIndexes.Count = 0 THEN
         File.WriteText File: $'''%FolderPathLog%excel_rows.log''' TextToWrite: $'''[NO WORK] ไม่พบแถวที่มีเลขบัตรประชาชนในคอลัมน์ C จบการทำงานก่อนเปิดเว็บ''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
         Excel.CloseExcel.Close Instance: ExcelInstance
-        GOTO EndOfRound
+        SET FailureSource TO $'''Input / Excel'''
+        SET FailureMessage TO $'''ไม่พบแถวที่มีเลขบัตรประชาชน 13 หลักสำหรับทำงาน'''
+        GOTO SendFailureEmail
     END
     IF InvalidExcelIDCount > 0 THEN
         SET PendingWork TO True
     END
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> DataStageNow
     File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%DataStageNow%] EXCEL_PREPARE_DONE work=%WorkExcelRowIndexes.Count%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    # FLOW3_EMPTY_ROWS_PREPARE_END
+    # 7. การตรวจโครงสร้างเอกสาร
+    # 7.1 ตรวจโฟลเดอร์ปีการศึกษา
     Folder.GetSubfolders Folder: FolderPathProcDocs FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> YearFolders
     IF YearFolders.Count <> 1 THEN
         SET CriticalErrorMessage TO $'''ภายใน ProcDocs ต้องมีโฟลเดอร์ปีเพียง 1 โฟลเดอร์ พบทั้งหมด %YearFolders.Count% โฟลเดอร์'''
-        # INLINE_BEGIN 0002 CriticalErrorAlert
-        CALL PlayErrorAlarm
-        Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-        File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-        WebAutomation.CloseWebBrowser BrowserInstance: Browser
-        ON ERROR
-            SET BrowserCloseFailed TO True
-        END
-        Excel.CloseExcel.Close Instance: ExcelInstance
-        ON ERROR
-            SET ExcelCloseFailed TO True
-        END
-        GOTO EndOfRound
-        # INLINE_END 0002 CriticalErrorAlert
+        SET FailureEmailRequired TO True
+        SET FailureSource TO CriticalErrorSource
+        SET FailureMessage TO CriticalErrorMessage
+        GOTO SendFailureEmail
     END
     SET AcademicYear TO YearFolders[0].Name
     Text.ParseText.RegexParseForFirstOccurrence Text: AcademicYear TextToFind: $'''^\\d{4}$''' StartingPosition: 0 IgnoreCase: False OccurrencePosition=> AcademicYearPosition Match=> AcademicYearMatch
     IF AcademicYearPosition = (-1) THEN
         SET CriticalErrorMessage TO $'''ชื่อโฟลเดอร์ปีไม่ถูกต้อง ต้องเป็นตัวเลข 4 หลัก แต่พบ: %AcademicYear%'''
-        # INLINE_BEGIN 0003 CriticalErrorAlert
-        CALL PlayErrorAlarm
-        Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-        File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-        WebAutomation.CloseWebBrowser BrowserInstance: Browser
-        ON ERROR
-            SET BrowserCloseFailed TO True
-        END
-        Excel.CloseExcel.Close Instance: ExcelInstance
-        ON ERROR
-            SET ExcelCloseFailed TO True
-        END
-        GOTO EndOfRound
-        # INLINE_END 0003 CriticalErrorAlert
+        SET FailureEmailRequired TO True
+        SET FailureSource TO CriticalErrorSource
+        SET FailureMessage TO CriticalErrorMessage
+        GOTO SendFailureEmail
     END
     SET YearFolderPath TO YearFolders[0].FullName
+    # 7.2 ตรวจโฟลเดอร์ภาคเรียน Term_*
     Folder.GetSubfolders Folder: YearFolderPath FolderFilter: $'''Term_*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> TermFolders
     IF TermFolders.Count = 0 THEN
         SET CriticalErrorMessage TO $'''ไม่พบโฟลเดอร์ Term_* ภายใน %YearFolderPath%'''
-        # INLINE_BEGIN 0004 CriticalErrorAlert
-        CALL PlayErrorAlarm
-        Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-        File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-        WebAutomation.CloseWebBrowser BrowserInstance: Browser
-        ON ERROR
-            SET BrowserCloseFailed TO True
-        END
-        Excel.CloseExcel.Close Instance: ExcelInstance
-        ON ERROR
-            SET ExcelCloseFailed TO True
-        END
-        GOTO EndOfRound
-        # INLINE_END 0004 CriticalErrorAlert
+        SET FailureEmailRequired TO True
+        SET FailureSource TO CriticalErrorSource
+        SET FailureMessage TO CriticalErrorMessage
+        GOTO SendFailureEmail
     END
 END
 IF InputStartupFailed = True THEN
-    # INLINE_BEGIN 0005 CriticalErrorAlert
-    CALL PlayErrorAlarm
-    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-    File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-    WebAutomation.CloseWebBrowser BrowserInstance: Browser
-    ON ERROR
-        SET BrowserCloseFailed TO True
-    END
-    Excel.CloseExcel.Close Instance: ExcelInstance
-    ON ERROR
-        SET ExcelCloseFailed TO True
-    END
-    GOTO EndOfRound
-    # INLINE_END 0005 CriticalErrorAlert
+    SET FailureEmailRequired TO True
+    SET FailureSource TO CriticalErrorSource
+    SET FailureMessage TO CriticalErrorMessage
+    GOTO SendFailureEmail
 END
+# 8. ระบบ Resume
+# 8.1 โหลดประวัติรายการที่เคยแนบสำเร็จเพื่อป้องกันการแนบซ้ำ
 SET CriticalErrorSource TO $'''Resume state'''
 SET CriticalErrorMessage TO $'''ไม่สามารถสร้างหรืออ่านไฟล์สถานะ Resume ได้'''
 SET ResumeStartupFailed TO False
@@ -353,32 +304,13 @@ END
     File.ReadTextFromFile.ReadText File: ResumeLogPath Encoding: File.TextFileEncoding.Unicode Content=> ResumeContents
 END
 IF ResumeStartupFailed = True THEN
-    # INLINE_BEGIN 0006 CriticalErrorAlert
-    CALL PlayErrorAlarm
-    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-    File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-    WebAutomation.CloseWebBrowser BrowserInstance: Browser
-    ON ERROR
-        SET BrowserCloseFailed TO True
-    END
-    Excel.CloseExcel.Close Instance: ExcelInstance
-    ON ERROR
-        SET ExcelCloseFailed TO True
-    END
-    GOTO EndOfRound
-    # INLINE_END 0006 CriticalErrorAlert
+    SET FailureEmailRequired TO True
+    SET FailureSource TO CriticalErrorSource
+    SET FailureMessage TO CriticalErrorMessage
+    GOTO SendFailureEmail
 END
+# 9. การเข้าสู่เว็บไซต์ กยศ.
+# 9.1 เปิด Chrome และ Login โดยลองใหม่ได้สามครั้ง
 SET CriticalErrorSource TO $'''Web / Login'''
 SET CriticalErrorMessage TO $'''ไม่สามารถเปิดเว็บไซต์หรือเข้าสู่ระบบได้ หลังลองใหม่ครบ 3 ครั้ง'''
 SET LoginStartupFailed TO False
@@ -387,7 +319,6 @@ ON BLOCK ERROR REPEAT 2 TIMES WAIT 60
 ON BLOCK ERROR
     SET LoginStartupFailed TO True
 END
-    # โฟลเดอร์แต่ละชุดต้องมาจากฟิลด์ J-M ใน Excel เช่น 001-1, 001-1(2), 002-2 และมี PDF ไม่เกิน 50 ไฟล์
     WebAutomation.LaunchChrome.LaunchChrome Url: $'''https://agent.dsl.studentloan.or.th/los/login''' WindowState: WebAutomation.BrowserWindowState.Maximized ClearCache: False ClearCookies: False WaitForPageToLoadTimeout: 60 Timeout: 60 PiPUserDataFolderMode: WebAutomation.PiPUserDataFolderModeEnum.AutomaticProfile TargetDesktop: $'''{\"DisplayName\":\"Local computer\",\"Route\":{\"ServerType\":\"Local\",\"ServerAddress\":\"\"},\"DesktopType\":\"local\"}''' BrowserInstance=> Browser
     WAIT 1
     WebAutomation.PopulateTextField.PopulateTextFieldUsePhysicalKeyboard BrowserInstance: Browser Control: appmask['Web Page \'https://agent.dsl.studentloan.or.th/los/login\'']['Input text \'username\''] Text: 1500700081881 Mode: WebAutomation.PopulateTextMode.Replace UnfocusAfterPopulate: True WaitForPageToLoadTimeout: 60
@@ -398,32 +329,13 @@ END
     WAIT (WebAutomation.WaitForWebPageContent.WebPageToContainElement BrowserInstance: Browser Control: appmask['Web Page \'h ... ement-list\'']['Anchor \'ลงนามแบบยืนยันการเบิกเงินกู้ยืม\'']) FOR 60
 END
 IF LoginStartupFailed = True THEN
-    # INLINE_BEGIN 0007 CriticalErrorAlert
-    CALL PlayErrorAlarm
-    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-    DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-    File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-    WebAutomation.CloseWebBrowser BrowserInstance: Browser
-    ON ERROR
-        SET BrowserCloseFailed TO True
-    END
-    Excel.CloseExcel.Close Instance: ExcelInstance
-    ON ERROR
-        SET ExcelCloseFailed TO True
-    END
-    GOTO EndOfRound
-    # INLINE_END 0007 CriticalErrorAlert
+    SET FailureEmailRequired TO True
+    SET FailureSource TO CriticalErrorSource
+    SET FailureMessage TO CriticalErrorMessage
+    GOTO SendFailureEmail
 END
+# 10. การเตรียมผลลัพธ์ของรอบ
+# 10.1 ตั้งค่าตัวนับสำเร็จ ล้มเหลว Resume และการพิมพ์
 SET ConsecutiveAttachErrors TO 0
 SET TotalSuccessCount TO 0
 SET TotalFailureCount TO 0
@@ -433,6 +345,8 @@ SET InvalidPdfNameCount TO 0
 SET PrintOkBatchCount TO 0
 SET PrintNgBatchCount TO 0
 SET PrintSkipBatchCount TO 0
+# 11. การประมวลผลชุดเอกสาร
+# 11.1 วนทีละเทอมและทีละโฟลเดอร์ชุด
 LOOP FOREACH CurrentTermFolder IN TermFolders
     IF CurrentTermFolder.Name = $'''Term_S''' THEN
         SET TermNumber TO 3
@@ -478,14 +392,12 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
         END
         DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> BatchStageNow
         File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%BatchStageNow%] BATCH_AUDIT_BEGIN | %CurrentTermFolder.Name% | %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        # FLOW3_PDF_CACHE_BEGIN
+        # 11.2 ตรวจชื่อ PDF และสร้างดัชนีเลขบัตรประชาชน
         Variables.CreateNewList List=> CachedPdfStudentIDs
         SET BatchStudentIDKeys TO $'''|'''
-        # FLOW3_PDF_CACHE_END
         LOOP FOREACH AuditPdf IN BatchPdfFiles
             SET AuditStudentIDRaw TO AuditPdf.NameWithoutExtension
             Text.ParseText.RegexParseForFirstOccurrence Text: AuditStudentIDRaw TextToFind: $'''\\d{13}''' StartingPosition: 0 IgnoreCase: False OccurrencePosition=> AuditStudentIDPosition Match=> AuditStudentID
-            # FLOW3_PDF_CACHE_APPEND_BEGIN
             IF AuditStudentIDPosition = (-1) THEN
                 SET CachedPdfStudentID TO $'''INVALID_PDF_NAME'''
             ELSE
@@ -493,7 +405,6 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
                 SET BatchStudentIDKeys TO $'''%BatchStudentIDKeys%%AuditStudentID%|'''
             END
             Variables.AddItemToList Item: CachedPdfStudentID List: CachedPdfStudentIDs
-            # FLOW3_PDF_CACHE_APPEND_END
             IF AuditStudentIDPosition = (-1) THEN
                 Variables.IncreaseVariable Value: BatchFailureCount IncrementValue: 1
                 Variables.IncreaseVariable Value: TotalFailureCount IncrementValue: 1
@@ -529,7 +440,7 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
         END
         DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> BatchStageNow
         File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%BatchStageNow%] BATCH_AUDIT_DONE | %CurrentTermFolder.Name% | %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        # FLOW3_FASTMATCH_BEGIN
+        # 11.3 จับคู่ข้อมูล Excel กับ PDF
         Variables.CreateNewList List=> BatchRowIndexes
         Variables.CreateNewList List=> BatchPdfIndexes
         Variables.CreateNewList List=> BatchStudentIDList
@@ -547,7 +458,6 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
             Variables.IncreaseVariable Value: MapPdfIndex IncrementValue: 1
         END
         File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[FASTMATCH] %CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | pdf=%CachedPdfStudentIDs.Count% | matched=%BatchRowIndexes.Count%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-        # FLOW3_FASTMATCH_END
         DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> BatchStageNow
         File.WriteText File: $'''%FolderPathLog%data_timing.log''' TextToWrite: $'''[%BatchStageNow%] BATCH_WORK_BEGIN | %CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | rows=%WorkExcelRowIndexes.Count%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
         SET WorkPosLast TO BatchRowIndexes.Count - 1
@@ -566,7 +476,6 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
             SET CurrentExcelRow TO ExcelData[CurrentExcelRowIndex]
             SET StudentCode TO CurrentExcelRow[1]
             SET StudentName TO CurrentExcelRow[3]
-            # FLOW3_PDF_MATCH_BEGIN
             SET CurrentPdfIndex TO BatchPdfIndexes[WorkPos]
             SET CurrentPdf TO BatchPdfFiles[CurrentPdfIndex]
             DISABLE SET PdfFound TO $'''False'''
@@ -579,7 +488,6 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
                 DISABLE END
                 DISABLE Variables.IncreaseVariable Value: CandidatePdfIndex IncrementValue: 1
             DISABLE END
-            # FLOW3_PDF_MATCH_END
             DISABLE IF PdfFound = $'''False''' THEN
                 DISABLE NEXT LOOP
             DISABLE END
@@ -592,6 +500,7 @@ LOOP FOREACH CurrentTermFolder IN TermFolders
             SET AttachFailed TO False
             SET AttachSucceeded TO False
             SET AttachFailureReason TO $'''-'''
+            # 11.4 แนบ PDF ทีละรายและลองใหม่เมื่อเกิดข้อผิดพลาด
             LOOP RetryIndex FROM 1 TO 3 STEP 1
                 BLOCK AttachCurrentPdf
 ON BLOCK ERROR all
@@ -610,9 +519,9 @@ END
                         WAIT 1
                         WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... ement-list\'']['Button \'ค้นหา\''] WaitForPageToLoadTimeout: 60
                         WAIT (WebAutomation.WaitForWebPageContent.WebPageToNotContainElement BrowserInstance: Browser Control: appmask['Web Page \'h ... ement-list\'']['Div \'<div _ ... iv><!---->\'']) FOR 90 
-                        ON ERROR
+                            ON ERROR
 
-                        END
+                            END
                         WAIT 1
                         IF (WebAutomation.IfWebPageContains.WebPageContainsElement BrowserInstance: Browser Control: appmask['Web Page \'h ... ement-list\'']['Button \'พิมพ์เอกสาร\'']) THEN
                             SET SearchFound TO True
@@ -630,30 +539,12 @@ END
                         IF ConsecutiveAttachErrors >= 3 THEN
                             SET CriticalErrorSource TO $'''Search student / Web'''
                             SET CriticalErrorMessage TO $'''ค้นหานักศึกษาไม่พบติดต่อกัน 3 ราย | Term: %CurrentTermFolder.Name% | Batch: %CurrentBatchFolder.Name% | StudentID: %StudentID%'''
-                            # INLINE_BEGIN 0008 CriticalErrorAlert
-                            Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-                            DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-                            File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                            Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-                            WebAutomation.CloseWebBrowser BrowserInstance: Browser
-                            ON ERROR
-                                SET BrowserCloseFailed TO True
-                            END
-                            Excel.CloseExcel.Close Instance: ExcelInstance
-                            ON ERROR
-                                SET ExcelCloseFailed TO True
-                            END
-                            GOTO EndOfRound
-                            # INLINE_END 0008 CriticalErrorAlert
+                            SET FailureEmailRequired TO True
+                            SET FailureSource TO CriticalErrorSource
+                            SET FailureMessage TO CriticalErrorMessage
+                            SET FailureTerm TO CurrentTermFolder.Name
+                            SET FailureBatch TO CurrentBatchFolder.Name
+                            GOTO SendFailureEmail
                         END
                         EXIT LOOP
                     END
@@ -688,9 +579,9 @@ END
     if (left === 0 && !btnBlocked) { return \'DONE total=\' + boxes.length; }
     return \'LEFT=\' + left + \' of \' + boxes.length + \' btnDisabled=\' + btnBlocked;
 }''' Result=> ConsentResult
-                                    ON ERROR
+                                        ON ERROR
 
-                                    END
+                                        END
                                 IF Contains(ConsentResult, $'''DONE''', False) THEN
                                     EXIT LOOP
                                 END
@@ -751,18 +642,28 @@ END
                     WAIT 2
                     MouseAndKeyboard.SendKeys.FocusAndSendKeys TextToSend: $'''{Down}{Down}''' DelayBetweenKeystrokes: 10 SendTextAsHardwareKeys: False
                     WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... /140419437\'']['Button \'ยืนยันแนบเอกสาร\''] WaitForPageToLoadTimeout: 60
-                    ON ERROR
-                        SET StopRequested TO True
-                        SET AttachFailureReason TO $'''สั่งยืนยันแนบแล้วเกิดข้อผิดพลาด ยังไม่ทราบผล จึงไม่สั่งแนบซ้ำ'''
-                    END
+                        ON ERROR
+                            SET StopRequested TO True
+                            SET AttachFailureReason TO $'''สั่งยืนยันแนบแล้วเกิดข้อผิดพลาด ยังไม่ทราบผล จึงไม่สั่งแนบซ้ำ'''
+                            SET FailureSource TO $'''Attach PDF / Unknown result'''
+                            SET FailureMessage TO AttachFailureReason
+                            SET FailureTerm TO CurrentTermFolder.Name
+                            SET FailureBatch TO CurrentBatchFolder.Name
+                            GOTO SendFailureEmail
+                        END
                     IF StopRequested = True THEN
                         EXIT LOOP
                     END
                     WAIT (WebAutomation.WaitForWebPageContent.WebPageToContainElement BrowserInstance: Browser Control: appmask['Web Page \'h ... /140421357\'']['Button \'กลับสู่หน้าหลัก\'']) FOR 30 
-                    ON ERROR
-                        SET StopRequested TO True
-                        SET AttachFailureReason TO $'''หลังยืนยันแนบ ไม่พบปุ่มกลับสู่หน้าหลักภายใน 30 วินาที จึงไม่บันทึกว่าสำเร็จและไม่แนบซ้ำ'''
-                    END
+                        ON ERROR
+                            SET StopRequested TO True
+                            SET AttachFailureReason TO $'''หลังยืนยันแนบ ไม่พบปุ่มกลับสู่หน้าหลักภายใน 30 วินาที จึงไม่บันทึกว่าสำเร็จและไม่แนบซ้ำ'''
+                            SET FailureSource TO $'''Attach PDF / Unknown result'''
+                            SET FailureMessage TO AttachFailureReason
+                            SET FailureTerm TO CurrentTermFolder.Name
+                            SET FailureBatch TO CurrentBatchFolder.Name
+                            GOTO SendFailureEmail
+                        END
                     IF StopRequested = True THEN
                         EXIT LOOP
                     END
@@ -783,30 +684,12 @@ END
                     IF ConsecutiveAttachErrors >= 3 THEN
                         SET CriticalErrorSource TO $'''Attach PDF / Web'''
                         SET CriticalErrorMessage TO $'''ขั้นตอนแนบ PDF ผิดพลาดติดต่อกัน 3 ครั้ง | Term: %CurrentTermFolder.Name% | Batch: %CurrentBatchFolder.Name% | รหัสนักศึกษา: %StudentCode% | เลขบัตรประชาชน: %StudentID% | File: %CurrentPdf.Name% | จุดที่พัง: %AttachFailureReason%'''
-                        # INLINE_BEGIN 0009 CriticalErrorAlert
-                        Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 DPA แนปไฟล์ หยุดทำงาน''' Message: CriticalErrorMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-                        DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CriticalErrorTime
-                        File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%CriticalErrorTime%] [CRITICAL] จุดที่ผิดพลาด: %CriticalErrorSource% | สาเหตุ: %CriticalErrorMessage%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                        Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Flow 3 Critical Failure - %CriticalErrorSource%''' Body: $'''Flow 3 หยุดทำงานเนื่องจากพบข้อผิดพลาดร้ายแรง
-
-เวลา: %CriticalErrorTime%
-จุดที่เกิดปัญหา: %CriticalErrorSource%
-สาเหตุ: %CriticalErrorMessage%
-
-ระบบได้หยุดการทำงานเพื่อป้องกันข้อมูลเสียหายหรือการแนบเอกสารซ้ำ
-
-กรุณาตรวจสอบไฟล์:
-%FolderPathLog%critical_error.log''' IsBodyHtml: False
-                        WebAutomation.CloseWebBrowser BrowserInstance: Browser
-                        ON ERROR
-                            SET BrowserCloseFailed TO True
-                        END
-                        Excel.CloseExcel.Close Instance: ExcelInstance
-                        ON ERROR
-                            SET ExcelCloseFailed TO True
-                        END
-                        GOTO EndOfRound
-                        # INLINE_END 0009 CriticalErrorAlert
+                        SET FailureEmailRequired TO True
+                        SET FailureSource TO CriticalErrorSource
+                        SET FailureMessage TO CriticalErrorMessage
+                        SET FailureTerm TO CurrentTermFolder.Name
+                        SET FailureBatch TO CurrentBatchFolder.Name
+                        GOTO SendFailureEmail
                     END
                     WAIT 5
                 END
@@ -842,6 +725,8 @@ END
         IF StopRequested = True THEN
             EXIT LOOP
         END
+        # 12. การตัดสินใจสร้างใบนำส่ง
+        # 12.1 ตรวจรายการธนาคารอิสลามและประวัติใบนำส่งเดิม
         IF BatchMatchedCount > 0 THEN
             IF BatchExpectedPrintCount = 0 THEN
                 Variables.IncreaseVariable Value: PrintSkipBatchCount IncrementValue: 1
@@ -862,7 +747,11 @@ END
 
 กรุณาตรวจบนเว็บว่ามีใบนำส่งอยู่แล้วหรือยัง ก่อนสร้างใหม่
 Flow จะหยุดและคงหน้าเว็บไว้''' Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 5 ButtonPressed=> ButtonPressed2
-                EXIT LOOP
+                SET FailureSource TO $'''Print delivery note / Manual review'''
+                SET FailureMessage TO $'''ไม่มีรายการแนบสำเร็จใหม่ และไม่พบประวัติบันทึก PDF ของชุดนี้ กรุณาตรวจสอบใบนำส่งเดิมบนเว็บไซต์'''
+                SET FailureTerm TO CurrentTermFolder.Name
+                SET FailureBatch TO CurrentBatchFolder.Name
+                GOTO SendFailureEmail
             END
         END
         IF PrintAlreadySaved = True THEN
@@ -870,8 +759,14 @@ Flow จะหยุดและคงหน้าเว็บไว้''' Icon:
             Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''ตรวจสอบรายการแนบเพิ่มเติม''' Message: $''' ชุด %PrintResumeKey% เคยบันทึกใบนำส่งแล้ว
         แต่รอบนี้แนบสำเร็จใหม่ %BatchSuccessCount% ราย
         กรุณาตรวจรายการบนเว็บก่อนสร้างใบนำส่งเพิ่มเติม''' Icon: Display.Icon.None Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 5 ButtonPressed=> ButtonPressed2
-            EXIT LOOP
+            SET FailureSource TO $'''Print delivery note / Manual review'''
+            SET FailureMessage TO $'''ชุดนี้เคยบันทึกใบนำส่งแล้ว แต่รอบนี้มีรายการแนบสำเร็จเพิ่ม กรุณาตรวจสอบก่อนสร้างใบนำส่งเพิ่มเติม'''
+            SET FailureTerm TO CurrentTermFolder.Name
+            SET FailureBatch TO CurrentBatchFolder.Name
+            GOTO SendFailureEmail
         END
+        # 13. การสร้างใบนำส่ง
+        # 13.1 เปิดหน้าพิมพ์ ตรวจตาราง และตรวจจำนวนรายการ
         SET PrintFailed TO False
         SET PrintPdfSaved TO False
         SET PrintStage TO $'''SEARCH_PRINT_TABLE'''
@@ -943,9 +838,9 @@ END
     var ok = (rows > 0 && size === \'100\');
     return (ok ? \'READY\' : \'RETRY\') + \' | size=\' + size + \' | rows=\' + rows + \' | \' + total;
 }''' Result=> PrintTableState
-                ON ERROR
-                    SET PrintTableState TO $'''RETRY | JavaScript ทำงานไม่ได้'''
-                END
+                    ON ERROR
+                        SET PrintTableState TO $'''RETRY | JavaScript ทำงานไม่ได้'''
+                    END
                 IF Contains(PrintTableState, $'''READY''', False) THEN
                     EXIT LOOP
                 END
@@ -968,9 +863,9 @@ END
 
     return h.checked ? \'CLICKED\' : \'NOTCHECKED\';
 }''' Result=> checkbox
-                ON ERROR
-                    SET PrintCheckState TO $'''NOTTICKED'''
-                END
+                    ON ERROR
+                        SET PrintCheckState TO $'''NOTTICKED'''
+                    END
                 DISABLE WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... t-document\'']['Input checkbox'] WaitForPageToLoadTimeout: 60
                 WAIT 3
                 WebAutomation.ExecuteJavascript BrowserInstance: Browser Javascript: $'''function ExecuteScript() {
@@ -982,9 +877,9 @@ END
     if (n > 0 && n === boxes.length) { return \'TICKED all=\' + n; }
     return \'NOTTICKED checked=\' + n + \' of \' + boxes.length;
 }''' Result=> PrintCheckState
-                ON ERROR
-                    SET PrintCheckState TO $'''NOTTICKED'''
-                END
+                    ON ERROR
+                        SET PrintCheckState TO $'''NOTTICKED'''
+                    END
                 File.WriteText File: $'''%FolderPathLog%print_table_debug.log''' TextToWrite: $'''%CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | ติ๊ก -> %PrintCheckState%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                 IF NotContains(PrintCheckState, $'''TICKED all=''', False) THEN
                     SET PrintFailed TO True
@@ -998,13 +893,13 @@ END
     }
     return \'\' + n;
 }''' Result=> PrintTickedText
-                        ON ERROR
-                            SET PrintTickedText TO 0
-                        END
+                            ON ERROR
+                                SET PrintTickedText TO 0
+                            END
                     Text.ToNumber Text: PrintTickedText Number=> PrintTickedNum
-                        ON ERROR
-                            SET PrintTickedNum TO 0
-                        END
+                            ON ERROR
+                                SET PrintTickedNum TO 0
+                            END
                     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> LogNow
                     Text.ConvertDateTimeToText.FromCustomDateTime DateTime: LogNow CustomFormat: $'''d/M''' Result=> LogDM
                     Text.ConvertDateTimeToText.FromCustomDateTime DateTime: LogNow CustomFormat: $'''HH:mm:ss''' Result=> LogHMS
@@ -1025,6 +920,7 @@ END
                 END
             END
             IF PrintFailed = False THEN
+                # 13.2 รอและกดยืนยันการจัดพิมพ์
                 SET PrintStage TO $'''WAIT_PRINT_CONFIRM_BUTTON'''
                 SET PrintButtonReady TO False
                 SET PrintButtonState TO $'''NOT_STARTED'''
@@ -1042,9 +938,9 @@ END
     b.scrollIntoView({block: \"center\"});
     return \"READY\";
 }''' Result=> PrintButtonState
-                    ON ERROR
-                        SET PrintButtonState TO $'''JAVASCRIPT_ERROR'''
-                    END
+                        ON ERROR
+                            SET PrintButtonState TO $'''JAVASCRIPT_ERROR'''
+                        END
                     IF PrintButtonState = $'''READY''' THEN
                         SET PrintButtonReady TO True
                         EXIT LOOP
@@ -1064,33 +960,33 @@ END
     var m = text.match(/KTB-\\d+-\\d+/);
     return m ? m[0] : \"NOT_FOUND\";
 }''' Result=> KtbDocNo
-                ON ERROR
-                    SET KtbDocNo TO $'''JAVASCRIPT_ERROR'''
-                END
+                    ON ERROR
+                        SET KtbDocNo TO $'''JAVASCRIPT_ERROR'''
+                    END
             END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''CONFIRM_PRINT'''
                 WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... nt-summary\'']['Button \'ยืนยันจัดพิมพ์ใบนำส่ง\' 4'] WaitForPageToLoadTimeout: 60
-                ON ERROR
-                    SET PrintFailed TO True
-                    SET PrintFailureReason TO $'''กดปุ่ม ยืนยันจัดพิมพ์ใบนำส่ง ไม่สำเร็จ'''
-                END
+                    ON ERROR
+                        SET PrintFailed TO True
+                        SET PrintFailureReason TO $'''กดปุ่ม ยืนยันจัดพิมพ์ใบนำส่ง ไม่สำเร็จ'''
+                    END
             END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''WAIT_PRINT_DIALOG'''
                 WAIT (WebAutomation.WaitForWebPageContent.WebPageToContainElement BrowserInstance: Browser Control: appmask['Web Page \'h ... nt-summary\'']['Button \'ตกลง\'']) FOR 30 
-                ON ERROR
-                    SET PrintFailed TO True
-                    SET PrintFailureReason TO $'''กดยืนยันจัดพิมพ์แล้ว แต่กล่องยืนยันไม่ขึ้นใน 30 วินาที'''
-                END
+                    ON ERROR
+                        SET PrintFailed TO True
+                        SET PrintFailureReason TO $'''กดยืนยันจัดพิมพ์แล้ว แต่กล่องยืนยันไม่ขึ้นใน 30 วินาที'''
+                    END
             END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''ACCEPT_PRINT_DIALOG'''
                 WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... nt-summary\'']['Button \'ตกลง\''] WaitForPageToLoadTimeout: 60
-                ON ERROR
-                    SET PrintFailed TO True
-                    SET PrintFailureReason TO $'''กดปุ่ม ตกลง ในกล่องยืนยันจัดพิมพ์ไม่สำเร็จ'''
-                END
+                    ON ERROR
+                        SET PrintFailed TO True
+                        SET PrintFailureReason TO $'''กดปุ่ม ตกลง ในกล่องยืนยันจัดพิมพ์ไม่สำเร็จ'''
+                    END
             END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''CHECK_PDF_TAB'''
@@ -1099,12 +995,13 @@ END
     var focused = document.hasFocus() ? \'FOCUS\' : \'NOFOCUS\';
     return focused + \' | \' + window.location.href;
 }''' Result=> PrintTabState
-                ON ERROR
-                    SET PrintTabState TO $'''UNKNOWN'''
-                END
+                    ON ERROR
+                        SET PrintTabState TO $'''UNKNOWN'''
+                    END
                 File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''%CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | %PrintTabState%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
             END
             IF PrintFailed = False THEN
+                # 13.3 ตรวจแท็บ PDF ปิดแท็บ และบันทึกเลข KTB
                 SET PrintStage TO $'''CLOSE_PDF_TAB'''
                 SET PdfTabUrl TO $'''NOT_READ'''
                 SET PdfTabFound TO False
@@ -1128,12 +1025,11 @@ END
                     SET PrintPdfSaved TO True
                     File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''%CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | ปิดแท็บ PDF แล้ว (รอบ %PdfTabTry%) | %KtbDocNo% | %PdfTabUrl%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     File.WriteText File: PrintResumeLogPath TextToWrite: PrintResumeKey AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                    # ---- บันทึกเลข KTB (อ่านหลังพิมพ์ ตัวเลขถูกสร้างแล้ว / พังก็ไม่กระทบงานพิมพ์) ----
                     SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB.log'''
                     Folder.Create FolderPath: $'''D:\\SPU_JOB\\RPA\\Flow3''' FolderName: $'''KTB''' Folder=> KtbFolder
-                    ON ERROR
+                        ON ERROR
 
-                    END
+                        END
                     SET KtbAfterPrint TO $'''NOT_FOUND'''
                     LOOP KtbTry FROM 1 TO 10 STEP 1
                         WebAutomation.ExecuteJavascript BrowserInstance: Browser Javascript: $'''function ExecuteScript() {
@@ -1143,9 +1039,9 @@ END
     var u = m.filter(function (v, i) { return m.indexOf(v) === i; });
     return u.join(\" / \");
 }''' Result=> KtbAfterPrint
-                        ON ERROR
-                            SET KtbAfterPrint TO $'''JAVASCRIPT_ERROR'''
-                        END
+                            ON ERROR
+                                SET KtbAfterPrint TO $'''JAVASCRIPT_ERROR'''
+                            END
                         IF StartsWith(KtbAfterPrint, $'''KTB-''', False) THEN
                             EXIT LOOP
                         END
@@ -1157,16 +1053,16 @@ END
                     SET KtbLineNo TO 1
                     IF (File.IfFile.Exists File: KtbLogPath) THEN
                         File.ReadTextFromFile.ReadTextAsList File: KtbLogPath Encoding: File.TextFileEncoding.Unicode Contents=> KtbLines
-                        ON ERROR
+                            ON ERROR
 
-                        END
+                            END
                         SET KtbLineNo TO KtbLines.Count + 1
                     END
                     SET KtbWriteFailed TO False
                     File.WriteText File: KtbLogPath TextToWrite: $'''%KtbLineNo%. %KtbDocNo% ชุดที่ %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                    ON ERROR
-                        SET KtbWriteFailed TO True
-                    END
+                        ON ERROR
+                            SET KtbWriteFailed TO True
+                        END
                     IF KtbWriteFailed = True THEN
                         File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''บันทึก KTB.log ไม่สำเร็จ | %KtbDocNo% | %CurrentBatchFolder.Name%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     END
@@ -1178,18 +1074,18 @@ END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''WAIT_RETURN_BUTTON'''
                 WAIT (WebAutomation.WaitForWebPageContent.WebPageToContainElement BrowserInstance: Browser Control: appmask['Web Page \'h ... nt-summary\'']['Button \'กลับหน้าหลัก\'']) FOR 30 
-                ON ERROR
-                    SET PrintFailed TO True
-                    SET PrintFailureReason TO $'''หลังจัดพิมพ์แล้ว กลับมาที่หน้าสรุปไม่ได้'''
-                END
+                    ON ERROR
+                        SET PrintFailed TO True
+                        SET PrintFailureReason TO $'''หลังจัดพิมพ์แล้ว กลับมาที่หน้าสรุปไม่ได้'''
+                    END
             END
             IF PrintFailed = False THEN
                 SET PrintStage TO $'''RETURN_TO_MAIN'''
                 WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... nt-summary\'']['Button \'กลับหน้าหลัก\''] WaitForPageToLoadTimeout: 60
-                ON ERROR
-                    SET PrintFailed TO True
-                    SET PrintFailureReason TO $'''กดปุ่ม กลับหน้าหลัก ไม่สำเร็จ'''
-                END
+                    ON ERROR
+                        SET PrintFailed TO True
+                        SET PrintFailureReason TO $'''กดปุ่ม กลับหน้าหลัก ไม่สำเร็จ'''
+                    END
             END
         END
         IF PrintPdfSaved = False THEN
@@ -1203,25 +1099,21 @@ END
         Text.ConvertDateTimeToText.FromCustomDateTime DateTime: LogNow CustomFormat: $'''HH:mm:ss''' Result=> LogHMS
         SET LogYearBE TO LogNow.Year + 543
         SET LogStamp TO $'''%LogDM%/%LogYearBE% %LogHMS%'''
+        # 14. การจัดการผลการพิมพ์
+        # 14.1 เมื่อพิมพ์ล้มเหลว ให้บันทึก Log และส่งผ่านตัวส่ง Fail กลาง
         IF PrintFailed = True THEN
             CALL PlayErrorAlarm
             Variables.IncreaseVariable Value: PrintNgBatchCount IncrementValue: 1
             File.WriteText File: $'''%FolderPathLog%batch_print_failed_%CurrentBatchFolder.Name%.log''' TextToWrite: $'''[%LogStamp%] - [❌ FAILED-PRINT] Term: %CurrentTermFolder.Name% | Batch: %CurrentBatchFolder.Name% | แนบสำเร็จ %BatchSuccessCount% | ล้มเหลว %BatchFailureCount% | สาเหตุ: \"%PrintFailureReason%\"''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+            Folder.GetFiles Folder: FolderPathLog FileFilter: $'''batch_print_failed_%CurrentBatchFolder.Name%.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> PrintFailureLogFiles
             SET StopRequested TO True
             File.WriteText File: $'''%FolderPathLog%print_recovery_required.log''' TextToWrite: $'''[STOP] %CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | stage=%PrintStage% | %PrintFailureReason% | saved=%PrintPdfSaved% | %PrintTableState% | %PrintCheckState% | %PrintTabState%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-            IF PrintCountMismatch = True THEN
-                SET CountAlertEmailFailed TO False
-                Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''[Flow3] จำนวนใบนำส่งไม่ตรง - %PrintResumeKey%''' Body: PrintFailureReason IsBodyHtml: False
-                ON ERROR
-                    SET CountAlertEmailFailed TO True
-                END
-                IF CountAlertEmailFailed = True THEN
-                    File.WriteText File: $'''%FolderPathLog%email_failed.log''' TextToWrite: $'''แจ้งยอดใบนำส่งไม่ตรงทางอีเมลไม่สำเร็จ | %PrintFailureReason%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                END
-            ELSE
-                Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''FLOW3 หยุดตรวจสอบการพิมพ์''' Message: PrintFailureReason Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> ButtonPressed
-            END
-            EXIT LOOP
+            SET FailureEmailRequired TO True
+            SET FailureSource TO $'''Print delivery note'''
+            SET FailureMessage TO PrintFailureReason
+            SET FailureTerm TO CurrentTermFolder.Name
+            SET FailureBatch TO CurrentBatchFolder.Name
+            GOTO SendFailureEmail
         ELSE
             Variables.IncreaseVariable Value: PrintOkBatchCount IncrementValue: 1
             File.WriteText File: $'''%FolderPathLog%batch_print_success_%CurrentBatchFolder.Name%.log''' TextToWrite: $'''[%LogStamp%] - [✅ SUCCESS-PRINT] Term: %CurrentTermFolder.Name% | Batch: %CurrentBatchFolder.Name% | แนบสำเร็จ %BatchSuccessCount% | ล้มเหลว %BatchFailureCount% | สถานะ สร้างใบนำส่งสำเร็จ''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
@@ -1231,38 +1123,51 @@ END
         EXIT LOOP
     END
 END
+# 15. การปิดโปรแกรมหลังจบรอบ
+# 15.1 กรณีผู้ใช้สั่งหยุด ให้ปิด Browser และ Excel โดยไม่ส่งสรุป
 IF StopRequested = True THEN
     File.WriteText File: $'''%FolderPathLog%stop_requested.log''' TextToWrite: $'''[STOP] หยุด Flow ตามคำสั่งผู้ใช้ | แนบสำเร็จ %TotalSuccessCount% | ล้มเหลว %TotalFailureCount% | ค้างเบราว์เซอร์ไว้ ไม่ logout ไม่ปิด Excel ไม่ส่งอีเมล''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
     WebAutomation.CloseWebBrowser BrowserInstance: Browser
-    ON ERROR
+        ON ERROR
 
-    END
+        END
     Excel.CloseExcel.Close Instance: ExcelInstance
-    ON ERROR
+        ON ERROR
 
-    END
+        END
 ELSE
+    # 15.2 กรณีจบรอบปกติ ให้ออกจากระบบและปิดโปรแกรม
     WebAutomation.HoverOverElement BrowserInstance: Browser Control: appmask['Web Page \'h ... t-document\'']['Image \'icon down\' 2'] UseActualMouse: False
-    ON ERROR
+        ON ERROR
 
-    END
+        END
     WebAutomation.PressButton.PressButton BrowserInstance: Browser Control: appmask['Web Page \'h ... t-document\'']['Div \'ออกจากระบบ\' 2'] WaitForPageToLoadTimeout: 60
-    ON ERROR
+        ON ERROR
 
-    END
+        END
     WebAutomation.CloseWebBrowser BrowserInstance: Browser
-    ON ERROR
+        ON ERROR
 
-    END
+        END
     Excel.CloseExcel.Close Instance: ExcelInstance
-    ON ERROR
+        ON ERROR
 
-    END
+        END
+    # 16. อีเมลสรุปและการจัดเก็บผลลัพธ์
+    # 16.1 กำหนดสถานะสำเร็จทั้งหมดหรือสำเร็จบางส่วน
     DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> CurrentDateTime
     Text.ConvertDateTimeToText.FromCustomDateTime DateTime: CurrentDateTime CustomFormat: $'''yyyyMMdd_HHmmss''' Result=> TimeStamp
+    SET SummaryStatus TO $'''สำเร็จทั้งหมด'''
+    IF PendingWork = True THEN
+        SET SummaryStatus TO $'''สำเร็จบางส่วน มีรายการล้มเหลว'''
+    END
+    IF TotalFailureCount > 0 THEN
+        SET SummaryStatus TO $'''สำเร็จบางส่วน มีรายการล้มเหลว'''
+    END
+    # 16.2 ส่งอีเมลสรุปพร้อม Log ของรอบปัจจุบัน
     SET SummaryEmailFailed TO False
     Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> LogFiles
-    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''รายงานผลการรัน Rpa_Flow3_การแนบไฟล์ - %CopiedFiles[0].NameWithoutExtension% %CurrentDateTime%''' Body: $'''ไฟล์ Excel ที่ประมวลผล: %CopiedFiles[0].NameWithoutExtension%
+    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''%SummaryStatus% - Rpa Flow3 - %CopiedFiles[0].NameWithoutExtension% - %RunDisplayTime%''' Body: $'''ไฟล์ Excel ที่ประมวลผล: %CopiedFiles[0].NameWithoutExtension%
 เวลาจบการทำงาน: %CurrentDateTime%
 
 ===== สรุปผลการทำงานทั้งรอบ =====
@@ -1292,25 +1197,123 @@ not_in_excel_skipped.log = เฉพาะรายการที่ไม่�
 resume_skipped.log = รายการที่ข้ามเพราะเคยสำเร็จแล้ว
 batch_print_*.log = ผลการพิมพ์ใบนำส่งรายชุด
 stop_requested.log = บันทึกเมื่อมีการสั่งหยุด Flow''' IsBodyHtml: False Attachments: LogFiles
-    ON ERROR
-        SET SummaryEmailFailed TO True
-    END
+        ON ERROR REPEAT 2 TIMES WAIT 60
+        ON ERROR
+            SET SummaryEmailFailed TO True
+        END
+    # 16.3 เก็บอีเมลและ Log ไว้ใน Outbox เมื่อส่งไม่สำเร็จครบสามครั้ง
     IF SummaryEmailFailed = True THEN
-        File.WriteText File: $'''%FolderPathLog%email_failed.log''' TextToWrite: $'''ส่งอีเมลสรุปไม่สำเร็จ ระบบดำเนินการจัดเก็บไฟล์ต่อ''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+        File.WriteText File: $'''%FolderPathLog%email_failed.log''' TextToWrite: $'''ส่งอีเมลสรุปไม่สำเร็จหลังลองครบ 3 ครั้ง เก็บ Log ไว้ใน EmailOutbox | RunID=%RunID%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+        SET SummaryOutboxName TO $'''SUMMARY_%RunID%'''
+        SET SummaryOutboxPath TO $'''%EmailOutboxRoot%%SummaryOutboxName%\\'''
+        Folder.Create FolderPath: EmailOutboxRoot FolderName: SummaryOutboxName Folder=> SummaryOutboxFolder
+                ON ERROR
+
+                END
+        Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> SummaryOutboxLogs
+        File.Copy Files: SummaryOutboxLogs Destination: SummaryOutboxPath IfFileExists: File.IfExists.Overwrite CopiedFiles=> CopiedSummaryOutboxLogs
+                ON ERROR
+
+                END
+        File.WriteText File: $'''%SummaryOutboxPath%pending_email.log''' TextToWrite: $'''RunID=%RunID%
+ประเภท=SUMMARY
+สถานะ=ส่ง Gmail ไม่สำเร็จหลังลองครบ 3 ครั้ง ต้องส่งย้อนหลัง''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode
     END
     Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> LogFiles
+    # 16.4 จัดเก็บ Excel ผลลัพธ์ ต้นฉบับ และ Log
     File.RenameFiles.Rename Files: CopiedFiles[0] NewName: $'''%CopiedFiles[0].NameWithoutExtension%_%TimeStamp%''' KeepExtension: True IfFileExists: File.IfExists.DoNothing RenamedFiles=> RenamedFiles
     File.Move Files: RenamedFiles Destination: FolderPathOutput IfFileExists: File.IfExists.DoNothing MovedFiles=> FinalExcel
     IF TotalFailureCount > 0 THEN
         SET PendingWork TO True
     END
     IF PendingWork = False THEN
-        File.RenameFiles.Rename Files: Files[0] NewName: $'''%Files[0].NameWithoutExtension%_%TimeStamp%''' KeepExtension: True IfFileExists: File.IfExists.DoNothing RenamedFiles=> RenamedArchiveFiles
-        File.Move Files: RenamedArchiveFiles Destination: FolderArchive IfFileExists: File.IfExists.DoNothing MovedFiles=> MovedFiles
+        File.Move Files: Files[0] Destination: FolderArchive IfFileExists: File.IfExists.DoNothing MovedFiles=> MovedFiles
     END
     File.RenameFiles.RenameAddText Files: LogFiles TextToAdd: $'''_%TimeStamp%''' TextPosition: File.AddTextPosition.AfterName IfFileExists: File.IfExists.DoNothing RenamedFiles=> RenamedFiles2
     File.Move Files: RenamedFiles2 Destination: FolderPathLogOutput IfFileExists: File.IfExists.DoNothing MovedFiles=> MovedLogs
+    Folder.Delete Folder: RunLogFolder
+        ON ERROR
+
+        END
 END
+GOTO EndOfRound
+# 17. ตัวส่งอีเมล Fail กลาง
+# 17.1 สร้าง Critical Log และรวบรวม Log ของรอบปัจจุบัน
+LABEL SendFailureEmail
+DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> FailureTime
+IF SendingPendingEmail = False THEN
+    CALL PlayErrorAlarm
+    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 Flow3 หยุดทำงาน''' Message: FailureMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> FailureButtonPressed
+    File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%FailureTime%] [FAIL] จุดที่ผิดพลาด: %FailureSource% | สาเหตุ: %FailureMessage% | Term: %FailureTerm% | Batch: %FailureBatch% | RunID: %RunID%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+    Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FailureLogFiles
+END
+# 17.2 ส่งอีเมล Fail และลองใหม่ทั้งหมดสามครั้ง
+SET FailureEmailFailed TO False
+Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Rpa Flow3 ล้มเหลว - %FailureSource% - %RunDisplayTime%''' Body: $'''Flow3 หยุดทำงาน
+
+รอบการทำงาน: %RunDisplayTime%
+เวลา: %FailureTime%
+จุดที่เกิดปัญหา: %FailureSource%
+สาเหตุ: %FailureMessage%
+Term: %FailureTerm%
+Batch: %FailureBatch%
+
+ระบบหยุดรอการตรวจสอบจากเจ้าหน้าที่
+ไฟล์ Log ที่แนบเป็นของรอบนี้เท่านั้น''' IsBodyHtml: False Attachments: FailureLogFiles
+    ON ERROR REPEAT 2 TIMES WAIT 60
+    ON ERROR
+        SET FailureEmailFailed TO True
+    END
+# 17.3 เก็บ Log ใน EmailOutbox เมื่อ Gmail ยังส่งไม่สำเร็จ
+IF FailureEmailFailed = True THEN
+    IF SendingPendingEmail = False THEN
+        SET FailureOutboxPath TO $'''%EmailOutboxRoot%%RunID%\\'''
+        Folder.Create FolderPath: EmailOutboxRoot FolderName: RunID Folder=> FailureOutboxFolder
+            ON ERROR
+
+            END
+        File.Copy Files: FailureLogFiles Destination: FailureOutboxPath IfFileExists: File.IfExists.Overwrite CopiedFiles=> OutboxLogFiles
+            ON ERROR
+
+            END
+        File.WriteText File: $'''%FailureOutboxPath%pending_email.log''' TextToWrite: $'''RunID=%RunID%
+FailureSource=%FailureSource%
+FailureMessage=%FailureMessage%
+FailureTerm=%FailureTerm%
+FailureBatch=%FailureBatch%
+สถานะ=ส่ง Gmail ไม่สำเร็จหลังลองครบ 3 ครั้ง ต้องส่งย้อนหลัง''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode
+    END
+ELSE
+    IF SendingPendingEmail = True THEN
+        Folder.Delete Folder: PendingEmailFolder
+                ON ERROR
+
+                END
+        SET SendingPendingEmail TO False
+        GOTO CheckPendingEmail
+    END
+END
+# 17.4 ย้าย Failure Log ไป Output_Log และปิดโปรแกรม
+IF SendingPendingEmail = False THEN
+    Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FailureLogsToArchive
+    File.RenameFiles.RenameAddText Files: FailureLogsToArchive TextToAdd: $'''_%RunID%''' TextPosition: File.AddTextPosition.AfterName IfFileExists: File.IfExists.DoNothing RenamedFiles=> RenamedFailureLogs
+    File.Move Files: RenamedFailureLogs Destination: FolderPathLogOutput IfFileExists: File.IfExists.DoNothing MovedFiles=> ArchivedFailureLogs
+    Folder.Delete Folder: RunLogFolder
+        ON ERROR
+
+        END
+END
+WebAutomation.CloseWebBrowser BrowserInstance: Browser
+    ON ERROR
+
+    END
+Excel.CloseExcel.Close Instance: ExcelInstance
+    ON ERROR
+
+    END
+GOTO EndOfRound
+# 18. จุดสิ้นสุด RunOneRound
+# 18.1 รวมเส้นทางจบทั้งหมดไว้ที่ตำแหน่งเดียว
 LABEL EndOfRound
 
 # [ControlRepository][PowerAutomateDesktop]
@@ -1336,4 +1339,3 @@ LABEL EndOfRound
   },
   "ConnectionReferences": []
 }
-
