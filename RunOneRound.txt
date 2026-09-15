@@ -1025,11 +1025,6 @@ END
                     SET PrintPdfSaved TO True
                     File.WriteText File: $'''%FolderPathLog%print_tab_debug.log''' TextToWrite: $'''%CurrentTermFolder.Name% | %CurrentBatchFolder.Name% | ปิดแท็บ PDF แล้ว (รอบ %PdfTabTry%) | %KtbDocNo% | %PdfTabUrl%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
                     File.WriteText File: PrintResumeLogPath TextToWrite: PrintResumeKey AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
-                    SET KtbLogPath TO $'''D:\\SPU_JOB\\RPA\\Flow3\\KTB\\KTB.log'''
-                    Folder.Create FolderPath: $'''D:\\SPU_JOB\\RPA\\Flow3''' FolderName: $'''KTB''' Folder=> KtbFolder
-                        ON ERROR
-
-                        END
                     SET KtbAfterPrint TO $'''NOT_FOUND'''
                     LOOP KtbTry FROM 1 TO 10 STEP 1
                         WebAutomation.ExecuteJavascript BrowserInstance: Browser Javascript: $'''function ExecuteScript() {
