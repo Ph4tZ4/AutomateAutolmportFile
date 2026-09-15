@@ -36,7 +36,7 @@ SET SendingPendingEmail TO False
 LABEL CheckPendingEmail
 Folder.GetSubfolders Folder: EmailOutboxRoot FolderFilter: $'''*''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.Name SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Subfolders=> PendingEmailFolders
 IF PendingEmailFolders.Count > 0 THEN
-    # 2.2 โหลดข้อความและ Log ของอีเมลค้าง แล้วส่งผ่านตัวส่ง Fail กลาง
+    # 2.2 ลองส่งอีเมลค้างก่อนเริ่มงาน หากยังส่งไม่ได้ให้เก็บไว้แล้วเริ่มงานต่อ
     SET PendingEmailFolder TO PendingEmailFolders[0]
     SET PendingEmailFolderPath TO PendingEmailFolder.FullName
     SET PendingEmailInfoPath TO $'''%PendingEmailFolderPath%\\pending_email.log'''
@@ -1167,7 +1167,7 @@ ELSE
     # 16.2 ส่งอีเมลสรุปพร้อม Log ของรอบปัจจุบัน
     SET SummaryEmailFailed TO False
     Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> LogFiles
-    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''%SummaryStatus% - Rpa Flow3 - %CopiedFiles[0].NameWithoutExtension% - %RunDisplayTime%''' Body: $'''ไฟล์ Excel ที่ประมวลผล: %CopiedFiles[0].NameWithoutExtension%
+    Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''%SummaryStatus% - RPA(แนบไฟล์) - %CopiedFiles[0].NameWithoutExtension% - %RunDisplayTime%''' Body: $'''ไฟล์ Excel ที่ประมวลผล: %CopiedFiles[0].NameWithoutExtension%
 เวลาจบการทำงาน: %CurrentDateTime%
 
 ===== สรุปผลการทำงานทั้งรอบ =====
@@ -1201,20 +1201,20 @@ stop_requested.log = บันทึกเมื่อมีการสั่�
         ON ERROR
             SET SummaryEmailFailed TO True
         END
-    # 16.3 เก็บอีเมลและ Log ไว้ใน Outbox เมื่อส่งไม่สำเร็จครบสามครั้ง
+    # 16.3 เก็บอีเมลและ Log ไว้ใน EmailOutbox เมื่อส่งไม่สำเร็จครบสามครั้ง
     IF SummaryEmailFailed = True THEN
         File.WriteText File: $'''%FolderPathLog%email_failed.log''' TextToWrite: $'''ส่งอีเมลสรุปไม่สำเร็จหลังลองครบ 3 ครั้ง เก็บ Log ไว้ใน EmailOutbox | RunID=%RunID%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
         SET SummaryOutboxName TO $'''SUMMARY_%RunID%'''
         SET SummaryOutboxPath TO $'''%EmailOutboxRoot%%SummaryOutboxName%\\'''
         Folder.Create FolderPath: EmailOutboxRoot FolderName: SummaryOutboxName Folder=> SummaryOutboxFolder
-                ON ERROR
+            ON ERROR
 
-                END
+            END
         Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> SummaryOutboxLogs
         File.Copy Files: SummaryOutboxLogs Destination: SummaryOutboxPath IfFileExists: File.IfExists.Overwrite CopiedFiles=> CopiedSummaryOutboxLogs
-                ON ERROR
+            ON ERROR
 
-                END
+            END
         File.WriteText File: $'''%SummaryOutboxPath%pending_email.log''' TextToWrite: $'''RunID=%RunID%
 ประเภท=SUMMARY
 สถานะ=ส่ง Gmail ไม่สำเร็จหลังลองครบ 3 ครั้ง ต้องส่งย้อนหลัง''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode
@@ -1243,13 +1243,13 @@ LABEL SendFailureEmail
 DateTime.GetCurrentDateTime.Local DateTimeFormat: DateTime.DateTimeFormat.DateAndTime CurrentDateTime=> FailureTime
 IF SendingPendingEmail = False THEN
     CALL PlayErrorAlarm
-    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 Flow3 หยุดทำงาน''' Message: FailureMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> FailureButtonPressed
+    Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 RPA(แนบไฟล์) หยุดทำงาน''' Message: FailureMessage Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> FailureButtonPressed
     File.WriteText File: $'''%FolderPathLog%critical_error.log''' TextToWrite: $'''[%FailureTime%] [FAIL] จุดที่ผิดพลาด: %FailureSource% | สาเหตุ: %FailureMessage% | Term: %FailureTerm% | Batch: %FailureBatch% | RunID: %RunID%''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
     Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FailureLogFiles
 END
 # 17.2 ส่งอีเมล Fail และลองใหม่ทั้งหมดสามครั้ง
 SET FailureEmailFailed TO False
-Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 Rpa Flow3 ล้มเหลว - %FailureSource% - %RunDisplayTime%''' Body: $'''Flow3 หยุดทำงาน
+Email.SendEmail.AuthenticateAndSend SMTPServer: $'''smtp.gmail.com''' Port: 587 EnableSSL: True Username: $'''possawee.aru@spumail.net''' Password: P'AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA1aly8c42tE+n4uVUueWukQQAAAACAAAAAAAQZgAAAAEAACAAAABmTzYsx8D7S2oyhAjyEuKfd8G5l8RwHZIQoN1hfPeCsgAAAAAOgAAAAAIAACAAAADTbHgbrFXZtj0TwlTx9bIPRljF2cxmdLtPfWFpHDKK/DAAAADYhSddYxqaAugX7xrGyhprbA5C17VBwYOMP62yr7u3uO/ji0Ax+gf+aaotGkhD4ERAAAAAqVW/KSPpv1XykpaY3VPKMZ+3o0oUsOoIZ5Sj0QETUpTq8bDaxghfQzeBE69vR5FD4LbegBuTW4hJJEZP9FBLqQ==' AcceptUntrustedCertificates: False SendFrom: $'''spu_automate@spumail.net''' SendTo: $'''possawee.aru@spumail.net''' Subject: $'''🚨 RPA(แนบไฟล์) ล้มเหลว - %FailureSource% - %RunDisplayTime%''' Body: $'''RPA(แนบไฟล์) หยุดทำงาน
 
 รอบการทำงาน: %RunDisplayTime%
 เวลา: %FailureTime%
@@ -1264,7 +1264,7 @@ Batch: %FailureBatch%
     ON ERROR
         SET FailureEmailFailed TO True
     END
-# 17.3 เก็บ Log ใน EmailOutbox เมื่อ Gmail ยังส่งไม่สำเร็จ
+# 17.3 เก็บหรือพักรายการใน EmailOutbox เมื่อ Gmail ยังส่งไม่สำเร็จ
 IF FailureEmailFailed = True THEN
     IF SendingPendingEmail = False THEN
         SET FailureOutboxPath TO $'''%EmailOutboxRoot%%RunID%\\'''
@@ -1282,18 +1282,35 @@ FailureMessage=%FailureMessage%
 FailureTerm=%FailureTerm%
 FailureBatch=%FailureBatch%
 สถานะ=ส่ง Gmail ไม่สำเร็จหลังลองครบ 3 ครั้ง ต้องส่งย้อนหลัง''' AppendNewLine: True IfFileExists: File.IfFileExists.Overwrite Encoding: File.FileEncoding.Unicode
+    ELSE
+        File.WriteText File: PendingEmailInfoPath TextToWrite: $'''ลองส่งล่าสุด: %FailureTime% | ยังส่ง Gmail ไม่สำเร็จ เก็บไว้ลองใหม่ในรอบถัดไป โดยไม่หยุดงานหลัก''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+        SET SendingPendingEmail TO False
+        GOTO BeginRun
     END
 ELSE
     IF SendingPendingEmail = True THEN
+        # 17.4 ลบ EmailOutbox ที่ส่งสำเร็จ และวนต่อเฉพาะเมื่อลบสำเร็จจริง
+        SET PendingOutboxDeleteFailed TO False
         Folder.Delete Folder: PendingEmailFolder
-                ON ERROR
+            ON ERROR
+                SET PendingOutboxDeleteFailed TO True
+            END
+        IF PendingOutboxDeleteFailed = True THEN
+            File.WriteText File: $'''%EmailOutboxRoot%outbox_delete_failed.log''' TextToWrite: $'''[%FailureTime%] [STOP] ส่งอีเมลค้างสำเร็จแล้ว แต่ลบโฟลเดอร์ %PendingEmailFolderPath% ไม่สำเร็จ ระบบหยุดเพื่อป้องกันการส่งอีเมลฉบับเดิมซ้ำ''' AppendNewLine: True IfFileExists: File.IfFileExists.Append Encoding: File.FileEncoding.Unicode
+            Display.ShowMessageDialog.ShowMessageWithTimeout Title: $'''🚨 RPA(แนบไฟล์) หยุดป้องกันอีเมลซ้ำ''' Message: $'''ส่งอีเมลค้างสำเร็จแล้ว แต่ลบโฟลเดอร์ EmailOutbox ไม่สำเร็จ
 
-                END
-        SET SendingPendingEmail TO False
-        GOTO CheckPendingEmail
+ระบบหยุดก่อนเริ่มงาน เพื่อป้องกันการส่งอีเมลฉบับเดิมซ้ำ
+
+กรุณาตรวจสอบ:
+%PendingEmailFolderPath%''' Icon: Display.Icon.Warning Buttons: Display.Buttons.OK DefaultButton: Display.DefaultButton.Button1 IsTopMost: True Timeout: 15 ButtonPressed=> OutboxDeleteButtonPressed
+            GOTO EndOfRound
+        ELSE
+            SET SendingPendingEmail TO False
+            GOTO CheckPendingEmail
+        END
     END
 END
-# 17.4 ย้าย Failure Log ไป Output_Log และปิดโปรแกรม
+# 17.5 ย้าย Failure Log ไป Output_Log และปิดโปรแกรม
 IF SendingPendingEmail = False THEN
     Folder.GetFiles Folder: FolderPathLog FileFilter: $'''*.log''' IncludeSubfolders: False FailOnAccessDenied: True SortBy1: Folder.SortBy.NoSort SortDescending1: False SortBy2: Folder.SortBy.NoSort SortDescending2: False SortBy3: Folder.SortBy.NoSort SortDescending3: False Files=> FailureLogsToArchive
     File.RenameFiles.RenameAddText Files: FailureLogsToArchive TextToAdd: $'''_%RunID%''' TextPosition: File.AddTextPosition.AfterName IfFileExists: File.IfExists.DoNothing RenamedFiles=> RenamedFailureLogs
